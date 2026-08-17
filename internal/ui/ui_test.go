@@ -206,13 +206,13 @@ func TestHelpBlockIsAGridOfColumns(t *testing.T) {
 	}
 
 	// Hints fill downward, so the first three land in column one and the next
-	// three in column two. Each row therefore pairs an entry from each.
-	wantPairs := [helpRows][2]string{
-		{"space", "task"},
+	// three in column two, with the toggle trailing in a third.
+	wantContents := [helpRows][]string{
+		{"space", "task", "hide"},
 		{"skip", "stats"},
 		{"reset", "quit"},
 	}
-	for i, want := range wantPairs {
+	for i, want := range wantContents {
 		for _, w := range want {
 			if !strings.Contains(rows[i], w) {
 				t.Errorf("row %d = %q, want it to contain %q", i, rows[i], w)
@@ -569,5 +569,270 @@ func TestMeter(t *testing.T) {
 	}
 	if got, want := meter("#", ".", 1, 0, 4), "...."; got != want {
 		t.Errorf("meter() with a zero total = %q, want %q", got, want)
+	}
+}
+
+// The behaviour that matters: quit mid-phase, come back, pick up where you
+// left off.
+func TestQuitThenRelaunchResumesWhereItLeftOff(t *testing.T) {
+	cfg := config.Default()
+	cfg.Focus = 25 * time.Minute
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	first, err := New(Options{Config: cfg, Store: st, Task: "render loop", StartRunning: true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	tick(first, 9*time.Minute)
+	press(first, "q")
+
+	second, err := New(Options{Config: cfg, Store: st, StartRunning: true})
+	if err != nil {
+		t.Fatalf("New() on relaunch error = %v", err)
+	}
+
+	if got, want := second.timer.Remaining, 16*time.Minute; got != want {
+		t.Errorf("Remaining = %v, want %v", got, want)
+	}
+	if second.timer.Task != "render loop" {
+		t.Errorf("Task = %q, want the label to survive the quit", second.timer.Task)
+	}
+	if !second.resumed {
+		t.Error("relaunch did not report itself as resumed")
+	}
+	if !strings.Contains(second.View(), "resumed") {
+		t.Error("the HUD does not say the session was resumed")
+	}
+}
+
+func TestResumeRestoresPhaseAndCycle(t *testing.T) {
+	cfg := config.Default()
+	cfg.Focus = time.Minute
+	cfg.ShortBreak = 5 * time.Minute
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	first, _ := New(Options{Config: cfg, Store: st, StartRunning: true})
+	tick(first, 61*time.Second) // finish the focus, land in a break
+	tick(first, time.Minute)
+	press(first, "q")
+
+	second, _ := New(Options{Config: cfg, Store: st, StartRunning: true})
+
+	if second.timer.Phase != timer.ShortBreak {
+		t.Errorf("Phase = %v, want the break to be resumed", second.timer.Phase)
+	}
+	if second.timer.CycleIndex != 1 {
+		t.Errorf("CycleIndex = %d, want 1", second.timer.CycleIndex)
+	}
+	// The 61s tick spent 60s finishing the focus and 1s on the break, then a
+	// further minute ran, leaving 5m - 1s - 1m.
+	if got, want := second.timer.Remaining, 3*time.Minute+59*time.Second; got != want {
+		t.Errorf("Remaining = %v, want %v", got, want)
+	}
+}
+
+// A session started before a quit must be logged against when it really began,
+// not when the program was relaunched.
+func TestResumedSessionLogsItsOriginalStartTime(t *testing.T) {
+	cfg := config.Default()
+	cfg.Focus = time.Minute
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	first, _ := New(Options{Config: cfg, Store: st, StartRunning: true})
+	originalStart := first.phaseStart
+	tick(first, 30*time.Second)
+	press(first, "q")
+
+	second, _ := New(Options{Config: cfg, Store: st, StartRunning: true})
+	if !second.phaseStart.Equal(originalStart.Round(0)) && second.phaseStart.Sub(originalStart).Abs() > time.Second {
+		t.Errorf("phaseStart = %v, want it close to the original %v", second.phaseStart, originalStart)
+	}
+}
+
+func TestFreshIgnoresTheSavedPosition(t *testing.T) {
+	cfg := config.Default()
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	first, _ := New(Options{Config: cfg, Store: st, Task: "old task", StartRunning: true})
+	tick(first, 9*time.Minute)
+	press(first, "q")
+
+	second, err := New(Options{Config: cfg, Store: st, Fresh: true, StartRunning: true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if second.timer.Remaining != cfg.Focus {
+		t.Errorf("Remaining = %v, want a full phase %v", second.timer.Remaining, cfg.Focus)
+	}
+	if second.resumed {
+		t.Error("-fresh still reported a resume")
+	}
+}
+
+func TestResumeDisabledInConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.Resume = false
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	first, _ := New(Options{Config: cfg, Store: st, StartRunning: true})
+	tick(first, 9*time.Minute)
+	press(first, "q")
+
+	if _, ok := st.LoadResume(time.Now()); ok {
+		t.Error("resume = false still wrote a state file")
+	}
+	second, _ := New(Options{Config: cfg, Store: st, StartRunning: true})
+	if second.timer.Remaining != cfg.Focus {
+		t.Errorf("Remaining = %v, want a full phase", second.timer.Remaining)
+	}
+}
+
+// An explicit -task is the user speaking now; it should win over the label
+// remembered from last time.
+func TestExplicitTaskOverridesTheRememberedOne(t *testing.T) {
+	cfg := config.Default()
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	first, _ := New(Options{Config: cfg, Store: st, Task: "old task", StartRunning: true})
+	tick(first, time.Minute)
+	press(first, "q")
+
+	second, _ := New(Options{Config: cfg, Store: st, Task: "new task", StartRunning: true})
+	if second.timer.Task != "new task" {
+		t.Errorf("Task = %q, want the flag to win", second.timer.Task)
+	}
+	if !second.resumed {
+		t.Error("overriding the task should not cancel the resume")
+	}
+}
+
+// Finishing a phase must overwrite the saved position, so a crash afterwards
+// cannot resurrect a session that already completed.
+func TestCompletingAPhaseRewritesTheSavedPosition(t *testing.T) {
+	cfg := config.Default()
+	cfg.Focus = time.Minute
+	cfg.ShortBreak = 5 * time.Minute
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	m, _ := New(Options{Config: cfg, Store: st, StartRunning: true})
+	tick(m, 61*time.Second) // focus completes, break begins
+
+	saved, ok := st.LoadResume(time.Now())
+	if !ok {
+		t.Fatal("no position was saved at the phase boundary")
+	}
+	if saved.Phase != timer.ShortBreak.String() {
+		t.Errorf("saved phase = %q, want the new break", saved.Phase)
+	}
+}
+
+func TestNothingIsSavedForAPhaseAboutToEnd(t *testing.T) {
+	cfg := config.Default()
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	m, _ := New(Options{Config: cfg, Store: st, SkipToEnd: true, StartRunning: true})
+	tick(m, 900*time.Millisecond) // 1s phase, so 100ms is left
+	press(m, "q")
+
+	if _, ok := st.LoadResume(time.Now()); ok {
+		t.Error("a phase with under a second left was saved as resumable")
+	}
+}
+
+func TestSlashTogglesTheLegend(t *testing.T) {
+	m, _ := testModel(t, nil)
+	sizeTo(m, 100, 40)
+
+	if !m.showHelp {
+		t.Fatal("the legend should start visible so the keys are discoverable")
+	}
+	full := strings.Split(m.View(), "\n")
+
+	press(m, "/")
+	if m.showHelp {
+		t.Fatal("/ did not hide the legend")
+	}
+	collapsed := strings.Split(m.View(), "\n")
+
+	if len(collapsed) >= len(full) {
+		t.Errorf("collapsed view is %d lines, want fewer than %d", len(collapsed), len(full))
+	}
+	if strings.Contains(collapsed[len(collapsed)-1], "pause") {
+		t.Error("the legend is still showing after being hidden")
+	}
+	// Hiding it entirely would leave no way back.
+	if !strings.Contains(collapsed[len(collapsed)-1], "keys") {
+		t.Errorf("no hint about the toggle once hidden: %q", collapsed[len(collapsed)-1])
+	}
+
+	press(m, "/")
+	if !m.showHelp {
+		t.Error("/ did not bring the legend back")
+	}
+}
+
+// Enter and esc are not guessable, so the legend must appear while editing
+// even when the user has hidden it.
+func TestEditingShowsTheKeysEvenWhenHidden(t *testing.T) {
+	m, _ := testModel(t, nil)
+	sizeTo(m, 100, 40)
+	press(m, "/")
+
+	press(m, "e")
+	out := m.View()
+
+	if !strings.Contains(out, "save") || !strings.Contains(out, "cancel") {
+		t.Errorf("editing keys are missing while the legend is hidden:\n%s", out)
+	}
+}
+
+func TestRequiredHeightTracksTheLegend(t *testing.T) {
+	m, _ := testModel(t, nil)
+
+	shown := m.requiredHeight()
+	press(m, "/")
+	hidden := m.requiredHeight()
+
+	if hidden >= shown {
+		t.Errorf("hiding the legend did not reduce the required height: %d then %d", shown, hidden)
+	}
+	if got, want := shown-hidden, helpRows-1; got != want {
+		t.Errorf("height changed by %d, want %d", got, want)
+	}
+}
+
+// Space arrives as KeySpace with Runes already holding " ". Appending both
+// produced a double space on every word break.
+func TestTypingSpacesInATaskLabel(t *testing.T) {
+	m, _ := testModel(t, nil)
+	press(m, "e")
+
+	for _, r := range "vibe code pomo" {
+		if r == ' ' {
+			m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+			continue
+		}
+		press(m, string(r))
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.timer.Task != "vibe code pomo" {
+		t.Errorf("Task = %q, want %q", m.timer.Task, "vibe code pomo")
 	}
 }

@@ -33,7 +33,7 @@ resolution, which is the difference between pixel art and ASCII art.
 ▌  ▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱  FOCUS  ● ● ● ○  3/4               ▐
 ▌  ▶ pomo render loop                                      ▐
 ▙▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▟
- space pause    e task
+ space pause    e task     / hide
  s skip         t stats
  r reset        q quit
 ```
@@ -52,6 +52,8 @@ made of. Run `pomo -demo` to see it properly.
   harder, and shake on the beat.
 - **Real progress.** XP, level and streak, all derived from your session log.
 - **Task labels.** Name what you're working on; it goes in the log.
+- **Picks up where you left off.** Quit mid-session and the next launch resumes
+  the same phase, clock and task.
 - **Three palettes** that cross-fade when the phase changes.
 
 ## Requirements
@@ -115,6 +117,7 @@ pomo --task "write the parser"        # label it
 pomo -f 50m -short-break 10m          # your own rhythm
 pomo -theme indigo -no-sound          # quieter
 pomo -paused                          # set things up before starting
+pomo -fresh                           # ignore the saved position, start over
 pomo -stats                           # print progress and exit
 ```
 
@@ -125,6 +128,7 @@ pomo -stats                           # print progress and exit
 | `r` | Restart the current phase |
 | `e` | Edit the task label |
 | `t` | Stats screen |
+| `/` | Show or hide the key legend |
 | `q` | Quit |
 
 ## Configuration
@@ -140,6 +144,7 @@ long_break_every  = 4        # focus sessions per long break
 auto_start_breaks = true
 auto_start_focus  = false
 show_seconds      = true     # false shows MM until the final minute
+resume            = true     # pick up where you left off after a quit
 scanlines         = true     # the CRT dim on alternate pixel rows
 theme             = "ember"  # ember, mint or indigo
 notify            = true
@@ -155,9 +160,11 @@ Finished sessions are appended to `$XDG_DATA_HOME/pomo/sessions.jsonl`
 {"start":"2026-08-16T09:00:00Z","mins":25,"task":"render loop","phase":"focus","done":true}
 ```
 
-XP, level and streak are **derived by replaying that log** at launch. There is
-no second state file, so the numbers cannot drift out of sync with the sessions
-that earned them.
+XP, level and streak are **derived by replaying that log** at launch. Nothing
+caches them, so the numbers cannot drift out of sync with the sessions that
+earned them. (The separate `state.json` described under
+[Resuming](#resuming) holds only your place in an unfinished phase — it never
+feeds these totals.)
 
 - **XP** — total completed focus minutes. Skipped sessions and breaks earn none.
 - **Level** — `floor(sqrt(XP / 25)) + 1`, so levels come quickly at first and
@@ -167,6 +174,21 @@ that earned them.
 
 Editing or deleting lines in the log changes your stats accordingly. That is the
 intended way to correct history.
+
+## Resuming
+
+Quitting mid-phase writes your position to `state.json` next to the session
+log. The next launch restores the phase, the remaining time, the cycle count
+and the task label, and marks the session `↻ resumed`.
+
+A saved position expires after 12 hours. Coming back the next week and landing
+mid-phase in a session you have forgotten about is worse than starting clean.
+`-fresh` ignores it on demand, and `resume = false` turns it off entirely.
+
+This file is deliberately separate from `sessions.jsonl`. That log is the
+append-only record of finished work and the only source of XP, level and
+streak; `state.json` is throwaway state for one unfinished phase, and deleting
+it costs nothing but your place.
 
 ## Editing the art
 

@@ -58,6 +58,7 @@ type flags struct {
 	noScanlines bool
 	noSeconds   bool
 	paused      bool
+	fresh       bool
 
 	// Development and verification affordances. They ship deliberately: they
 	// are what makes the timer debuggable without waiting 25 minutes.
@@ -93,6 +94,7 @@ func run() error {
 	flag.BoolVar(&f.noScanlines, "no-scanlines", false, "disable the CRT scanline dim")
 	flag.BoolVar(&f.noSeconds, "no-seconds", false, "show minutes only until the final minute")
 	flag.BoolVar(&f.paused, "paused", false, "start paused instead of counting down immediately")
+	flag.BoolVar(&f.fresh, "fresh", false, "ignore the saved position and start a new focus phase")
 
 	flag.BoolVar(&f.demo, "demo", false, "render the art once and exit, for iterating on sprites")
 	flag.BoolVar(&f.mono, "mono", false, "with -demo, print opacity silhouettes instead of color")
@@ -143,6 +145,7 @@ func run() error {
 		TickScale:    f.tickScale,
 		StartRunning: !f.paused,
 		SkipToEnd:    f.skipToEnd,
+		Fresh:        f.fresh,
 	})
 	if err != nil {
 		return err

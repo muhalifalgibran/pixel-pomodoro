@@ -28,6 +28,9 @@ type Config struct {
 	Scanlines   bool
 	Theme       string
 
+	// Resume restores the timer to wherever it was when you last quit.
+	Resume bool
+
 	Notify bool
 	Sound  string
 }
@@ -47,6 +50,7 @@ func Default() Config {
 		AutoStartFocus:  false,
 		ShowSeconds:     true,
 		Scanlines:       true,
+		Resume:          true,
 		Theme:           "ember",
 		Notify:          true,
 		Sound:           defaultSound,
@@ -87,6 +91,7 @@ type file struct {
 	AutoStartBreaks *bool     `toml:"auto_start_breaks"`
 	AutoStartFocus  *bool     `toml:"auto_start_focus"`
 	ShowSeconds     *bool     `toml:"show_seconds"`
+	Resume          *bool     `toml:"resume"`
 	Scanlines       *bool     `toml:"scanlines"`
 	Theme           *string   `toml:"theme"`
 	Notify          *bool     `toml:"notify"`
@@ -131,6 +136,9 @@ func Load(path string) (Config, error) {
 	}
 	if f.ShowSeconds != nil {
 		cfg.ShowSeconds = *f.ShowSeconds
+	}
+	if f.Resume != nil {
+		cfg.Resume = *f.Resume
 	}
 	if f.Scanlines != nil {
 		cfg.Scanlines = *f.Scanlines

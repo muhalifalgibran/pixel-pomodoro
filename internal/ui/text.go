@@ -147,22 +147,44 @@ func progressBar(pal theme.Palette, s *timer.State, width int) string {
 	return pad(line, width)
 }
 
+// resumedNote marks a session picked up from a previous run, so the clock
+// starting at an odd number reads as intentional.
+const resumedNote = "↻ resumed"
+
 // taskLine shows what the current session is for.
-func taskLine(pal theme.Palette, task string, editing bool, width int) string {
+func taskLine(pal theme.Palette, task string, editing, resumed bool, width int) string {
 	accent := lipgloss.NewStyle().Foreground(lg(pal.Accent))
 	text := lipgloss.NewStyle().Foreground(lg(pal.Text))
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
 
-	// Reserve the marker, the two leading spaces and a little slack.
-	room := width - 6
+	note := ""
+	// The note is suppressed while editing: the cursor should be the last
+	// thing on the line.
+	if resumed && !editing {
+		note = faint.Render(resumedNote) + " "
+	}
+
+	// Reserve the marker, the leading spaces, the note and a little slack.
+	room := width - 6 - lipgloss.Width(note)
+
+	var left string
 	switch {
 	case editing:
-		return pad("  "+accent.Render("▶ ")+text.Render(truncate(task, room))+accent.Render("█"), width)
+		left = "  " + accent.Render("▶ ") + text.Render(truncate(task, room)) + accent.Render("█")
 	case task == "":
-		return pad("  "+faint.Render("▶ no task — press e to name one"), width)
+		left = "  " + faint.Render("▶ no task — press e to name one")
 	default:
-		return pad("  "+accent.Render("▶ ")+text.Render(truncate(task, room)), width)
+		left = "  " + accent.Render("▶ ") + text.Render(truncate(task, room))
 	}
+
+	if note == "" {
+		return pad(left, width)
+	}
+	gap := width - lipgloss.Width(left) - lipgloss.Width(note)
+	if gap < 1 {
+		return pad(left, width)
+	}
+	return left + strings.Repeat(" ", gap) + note
 }
 
 // frameLines wraps content rows in the pixel border. Content rows must already
@@ -189,6 +211,14 @@ const helpRows = 3
 // rather than one run-on line.
 const helpColumnGap = 4
 
+// helpHint is the one-line stand-in shown when the legend is hidden. Hiding it
+// entirely would leave no way to discover the toggle again.
+func helpHint(pal theme.Palette) []string {
+	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
+	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
+	return []string{" " + key.Render("/") + faint.Render(" keys")}
+}
+
 // helpBlock lays the key hints out as a grid. A single long line pushed the
 // hints wider than the HUD frame above them; columns keep the block inside the
 // frame's footprint and group related keys vertically.
@@ -196,7 +226,10 @@ func helpBlock(pal theme.Palette, editing bool) []string {
 	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
 
-	parts := []string{"space pause", "s skip", "r reset", "e task", "t stats", "q quit"}
+	// Order matters: hints fill downward, so the first six form two full
+	// columns and the toggle trails on its own rather than stranding a
+	// primary key in a near-empty third column.
+	parts := []string{"space pause", "s skip", "r reset", "e task", "t stats", "q quit", "/ hide"}
 	if editing {
 		parts = []string{"enter save", "esc cancel"}
 	}

@@ -33,6 +33,32 @@ func (p Phase) String() string {
 // IsBreak reports whether the phase is either kind of break.
 func (p Phase) IsBreak() bool { return p == ShortBreak || p == LongBreak }
 
+// ParsePhase is the inverse of String, for reading a persisted phase back.
+func ParsePhase(s string) (Phase, bool) {
+	switch s {
+	case "focus":
+		return Focus, true
+	case "short break":
+		return ShortBreak, true
+	case "long break":
+		return LongBreak, true
+	}
+	return Focus, false
+}
+
+// Snapshot is the timer's position, enough to put it back exactly where it
+// was. It carries no config: durations come from whatever policy is in force
+// when it is restored, so changing your focus length does not invalidate a
+// saved session.
+type Snapshot struct {
+	Phase      Phase
+	Remaining  time.Duration
+	Running    bool
+	CycleIndex int
+	Completed  int
+	Task       string
+}
+
 // Config is the timing policy. Durations must be positive.
 type Config struct {
 	Focus           time.Duration
@@ -173,6 +199,49 @@ func (s *State) Advance(elapsed time.Duration) []Event {
 		events = append(events, s.endPhase(true))
 	}
 	return events
+}
+
+// Snapshot captures the current position.
+func (s *State) Snapshot() Snapshot {
+	return Snapshot{
+		Phase:      s.Phase,
+		Remaining:  s.Remaining,
+		Running:    s.Running,
+		CycleIndex: s.CycleIndex,
+		Completed:  s.Completed,
+		Task:       s.Task,
+	}
+}
+
+// Restore puts the timer back at a saved position. It validates against the
+// config in force rather than trusting the snapshot: the file is on disk where
+// a user can edit it, and the durations may have changed since it was written.
+func (s *State) Restore(snap Snapshot) error {
+	total := s.cfg.Duration(snap.Phase)
+	switch {
+	case snap.Phase != Focus && snap.Phase != ShortBreak && snap.Phase != LongBreak:
+		return fmt.Errorf("unknown phase %d", int(snap.Phase))
+	case snap.Remaining <= 0:
+		return fmt.Errorf("remaining must be positive, got %s", snap.Remaining)
+	case snap.Remaining > total:
+		// The phase was shortened in config since this was saved. Clamping
+		// beats refusing: the user still resumes, just at the new length.
+		snap.Remaining = total
+	}
+	if snap.CycleIndex < 0 || snap.CycleIndex >= s.cfg.LongBreakEvery {
+		snap.CycleIndex = 0
+	}
+	if snap.Completed < 0 {
+		snap.Completed = 0
+	}
+
+	s.Phase = snap.Phase
+	s.Remaining = snap.Remaining
+	s.Running = snap.Running
+	s.CycleIndex = snap.CycleIndex
+	s.Completed = snap.Completed
+	s.Task = snap.Task
+	return nil
 }
 
 // Skip ends the current phase early. The phase is recorded as not completed,

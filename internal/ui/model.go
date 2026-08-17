@@ -30,12 +30,6 @@ const (
 	steamPoolSize    = 48
 	confettiPoolSize = 90
 	confettiHold     = 1500 * time.Millisecond
-
-	// The full HUD needs this much room; below it we drop to a text layout
-	// rather than rendering broken art. Two borders, the status bar, the
-	// 12-row art band, the progress and task lines, and the help grid come to
-	// 20 rows, so this leaves a little slack.
-	minHeight = 22
 )
 
 type mode int
@@ -63,6 +57,8 @@ type Options struct {
 	// completion path — notification, sound, log append, confetti — can be
 	// verified without waiting it out.
 	SkipToEnd bool
+	// Fresh ignores any saved position and starts a new focus phase.
+	Fresh bool
 }
 
 // Model is the Bubble Tea model for the HUD.
@@ -94,11 +90,19 @@ type Model struct {
 	lastTick  time.Time
 	tickScale float64
 
-	// phaseStart is when the current phase began, for the session log.
+	// phaseStart is when the current phase began, for the session log. It
+	// survives a quit, so a session finished after resuming is logged against
+	// the time it actually started.
 	phaseStart time.Time
+	// resumed records that this run picked up a saved position, so the HUD can
+	// say so rather than leaving the user wondering why the clock is odd.
+	resumed bool
 
 	mode      mode
 	taskInput string
+	// showHelp toggles the key legend. It starts visible so the keys are
+	// discoverable, and "/" collapses it to a single hint line.
+	showHelp bool
 
 	width, height int
 	quitting      bool
@@ -116,6 +120,31 @@ func New(opts Options) (*Model, error) {
 	}
 	t.Task = opts.Task
 	t.Running = opts.StartRunning
+
+	now := time.Now()
+
+	// Pick up where the last session was left off. The phase start is restored
+	// too, so a session finished after resuming is logged against the time it
+	// actually began rather than this launch.
+	phaseStart := now
+	resumed := false
+	if opts.Config.Resume && !opts.Fresh && !opts.SkipToEnd {
+		if saved, ok := opts.Store.LoadResume(now); ok {
+			if snap, ok := saved.Snapshot(); ok {
+				// An explicit -task overrides the remembered label.
+				if opts.Task != "" {
+					snap.Task = opts.Task
+				}
+				if err := t.Restore(snap); err == nil {
+					resumed = true
+					if !saved.PhaseStart.IsZero() {
+						phaseStart = saved.PhaseStart
+					}
+				}
+			}
+		}
+	}
+
 	if opts.SkipToEnd && t.Remaining > time.Second {
 		t.Remaining = time.Second
 	}
@@ -138,7 +167,6 @@ func New(opts Options) (*Model, error) {
 	pal := theme.For(t.Phase)
 	clockW, clockH := clockCanvasSize(FormatRemaining(t.Remaining, opts.Config.ShowSeconds))
 
-	now := time.Now()
 	m := &Model{
 		cfg:   opts.Config,
 		store: opts.Store,
@@ -158,8 +186,10 @@ func New(opts Options) (*Model, error) {
 		palT:       1,
 		lastTick:   now,
 		tickScale:  scale,
-		phaseStart: now,
-		taskInput:  opts.Task,
+		phaseStart: phaseStart,
+		resumed:    resumed,
+		taskInput:  t.Task,
+		showHelp:   true,
 	}
 	m.confetti.Gravity = 34
 	m.confetti.Drag = 0.6
@@ -202,6 +232,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	switch msg.String() {
 	case "ctrl+c", "q":
+		m.saveResume()
 		m.quitting = true
 		return tea.Quit
 	case "t":
@@ -210,6 +241,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		} else {
 			m.mode = modeStats
 		}
+	case "/":
+		m.showHelp = !m.showHelp
 	case "esc":
 		m.mode = modeNormal
 	case " ":
@@ -240,10 +273,10 @@ func (m *Model) editKey(msg tea.KeyMsg) {
 			m.taskInput = string(r[:len(r)-1])
 		}
 	case tea.KeyRunes, tea.KeySpace:
+		// A space arrives as KeySpace with Runes already holding " ", so
+		// appending the rune is enough. Adding one for the key type as well
+		// inserted a double space on every word break.
 		m.taskInput += string(msg.Runes)
-		if msg.Type == tea.KeySpace {
-			m.taskInput += " "
-		}
 	}
 }
 
@@ -307,6 +340,23 @@ func (m *Model) updateParticles(dt float64) {
 	m.confetti.Update(dt)
 }
 
+// saveResume writes the current position so the next launch can pick it up.
+// A phase that has only just started is not worth remembering, and neither is
+// one about to end.
+func (m *Model) saveResume() {
+	if !m.cfg.Resume {
+		return
+	}
+	snap := m.timer.Snapshot()
+	if snap.Remaining < time.Second {
+		_ = m.store.ClearResume()
+		return
+	}
+	// Errors are dropped on purpose: failing to save your place must not stop
+	// the program exiting.
+	_ = m.store.SaveResume(store.NewResume(snap, m.phaseStart, time.Now()))
+}
+
 // record appends a finished phase to the log and refreshes the derived stats.
 func (m *Model) record(phase timer.Phase, ran time.Duration, completed bool) {
 	mins := int(math.Round(ran.Minutes()))
@@ -337,6 +387,12 @@ func (m *Model) onPhaseChange(ev timer.Event) {
 	m.palFrom = m.palette()
 	m.palTo = theme.For(ev.Next)
 	m.palT = 0
+
+	// The saved position now describes a phase that is over. Rewrite it
+	// immediately rather than waiting for a clean quit, so a crash cannot
+	// resurrect a session that already finished.
+	m.resumed = false
+	m.saveResume()
 
 	m.steam.Clear()
 	m.steamCredit = 0
@@ -375,7 +431,7 @@ func (m *Model) View() string {
 	if m.mode == modeStats {
 		return StatsReport(pal, m.stats, m.store.Path())
 	}
-	if m.width > 0 && (m.width < m.geom.BandW+2 || m.height < minHeight) {
+	if m.width > 0 && (m.width < m.geom.BandW+2 || m.height < m.requiredHeight()) {
 		return compactView(pal, m.timer, m.clockText(), m.stats)
 	}
 	return m.fullView(pal)
@@ -419,11 +475,36 @@ func (m *Model) fullView(pal theme.Palette) string {
 	content = append(content, statusBar(pal, m.stats, m.geom.BandW))
 	content = append(content, rows...)
 	content = append(content, progressBar(pal, m.timer, m.geom.BandW))
-	content = append(content, taskLine(pal, m.displayTask(), m.mode == modeEditTask, m.geom.BandW))
+	content = append(content, taskLine(pal, m.displayTask(), m.mode == modeEditTask, m.resumed, m.geom.BandW))
 
 	out := frameLines(pal, m.geom.BandW, content)
-	out = append(out, helpBlock(pal, m.mode == modeEditTask)...)
+	out = append(out, m.helpRowsFor(pal)...)
 	return strings.Join(out, "\n")
+}
+
+// helpRowsFor returns the legend, the one-line hint, or the editing keys.
+// While editing, the legend is shown regardless of the toggle: enter and esc
+// are not guessable, and being stuck in a text field is worse than a few extra
+// rows.
+func (m *Model) helpRowsFor(pal theme.Palette) []string {
+	if m.mode == modeEditTask {
+		return helpBlock(pal, true)
+	}
+	if !m.showHelp {
+		return helpHint(pal)
+	}
+	return helpBlock(pal, false)
+}
+
+// requiredHeight is the rows the full HUD needs: two borders, the status bar,
+// the art band, the progress and task lines, and however many rows the legend
+// currently occupies.
+func (m *Model) requiredHeight() int {
+	help := 1
+	if m.showHelp || m.mode == modeEditTask {
+		help = helpRows
+	}
+	return 2 + 3 + m.geom.BandH/2 + help
 }
 
 func (m *Model) displayTask() string {

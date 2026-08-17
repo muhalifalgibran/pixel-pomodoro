@@ -333,3 +333,88 @@ func TestPhaseString(t *testing.T) {
 		t.Error("breaks should report IsBreak() = true")
 	}
 }
+
+func TestParsePhaseRoundTripsString(t *testing.T) {
+	for _, p := range []Phase{Focus, ShortBreak, LongBreak} {
+		got, ok := ParsePhase(p.String())
+		if !ok {
+			t.Errorf("ParsePhase(%q) reported the phase as unknown", p.String())
+			continue
+		}
+		if got != p {
+			t.Errorf("ParsePhase(%q) = %v, want %v", p.String(), got, p)
+		}
+	}
+	if _, ok := ParsePhase("siesta"); ok {
+		t.Error("ParsePhase accepted a phase that does not exist")
+	}
+}
+
+func TestSnapshotAndRestoreRoundTrip(t *testing.T) {
+	s := newRunning(t, testConfig())
+	s.Task = "render loop"
+	s.Advance(9 * time.Minute)
+
+	snap := s.Snapshot()
+
+	restored, _ := New(testConfig())
+	if err := restored.Restore(snap); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+
+	if restored.Phase != s.Phase || restored.Remaining != s.Remaining ||
+		restored.Running != s.Running || restored.CycleIndex != s.CycleIndex ||
+		restored.Completed != s.Completed || restored.Task != s.Task {
+		t.Errorf("restored %+v, want it to match %+v", restored, s)
+	}
+}
+
+func TestRestoreRejectsAnImpossiblePosition(t *testing.T) {
+	tests := []struct {
+		name string
+		snap Snapshot
+	}{
+		{"zero remaining", Snapshot{Phase: Focus, Remaining: 0}},
+		{"negative remaining", Snapshot{Phase: Focus, Remaining: -time.Minute}},
+		{"unknown phase", Snapshot{Phase: Phase(42), Remaining: time.Minute}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, _ := New(testConfig())
+			if err := s.Restore(tt.snap); err == nil {
+				t.Error("Restore() accepted an impossible position")
+			}
+		})
+	}
+}
+
+// Shortening a phase in config must not strand a saved session above the new
+// length; clamping lets the user resume at the new duration.
+func TestRestoreClampsToTheCurrentPhaseLength(t *testing.T) {
+	cfg := testConfig()
+	cfg.Focus = 10 * time.Minute
+	s, _ := New(cfg)
+
+	if err := s.Restore(Snapshot{Phase: Focus, Remaining: 25 * time.Minute}); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if s.Remaining != 10*time.Minute {
+		t.Errorf("Remaining = %v, want it clamped to the configured 10m", s.Remaining)
+	}
+}
+
+// A hand-edited cycle index must not put the machine somewhere it can never
+// reach on its own.
+func TestRestoreNormalisesAnOutOfRangeCycle(t *testing.T) {
+	s, _ := New(testConfig()) // long_break_every = 4
+
+	if err := s.Restore(Snapshot{Phase: Focus, Remaining: time.Minute, CycleIndex: 99, Completed: -3}); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if s.CycleIndex != 0 {
+		t.Errorf("CycleIndex = %d, want it normalised to 0", s.CycleIndex)
+	}
+	if s.Completed != 0 {
+		t.Errorf("Completed = %d, want it normalised to 0", s.Completed)
+	}
+}

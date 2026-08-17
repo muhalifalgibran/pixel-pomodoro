@@ -1211,3 +1211,294 @@ func TestHabitRowsFitTheFrame(t *testing.T) {
 		}
 	}
 }
+
+// --- habit form ---
+
+// typeInto sends a string a rune at a time, as a real keyboard would.
+func typeInto(m *Model, s string) {
+	for _, r := range s {
+		if r == ' ' {
+			m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+			continue
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
+func tab(m *Model)   { m.Update(tea.KeyMsg{Type: tea.KeyTab}) }
+func enter(m *Model) { m.Update(tea.KeyMsg{Type: tea.KeyEnter}) }
+func esc(m *Model)   { m.Update(tea.KeyMsg{Type: tea.KeyEsc}) }
+
+func TestAddingAHabitThroughTheForm(t *testing.T) {
+	m, _, hs := habitModel(t)
+	press(m, "h")
+	press(m, "a")
+	if m.mode != modeHabitForm {
+		t.Fatal("a did not open the form")
+	}
+
+	typeInto(m, "deep work")
+	tab(m)
+	typeInto(m, "4h")
+	enter(m)
+
+	if m.mode != modeHabits {
+		t.Fatalf("mode = %v after saving, want the habit list; error was %q", m.mode, m.habitForm)
+	}
+	active := m.habits.Active()
+	if len(active) != 1 {
+		t.Fatalf("list holds %d habits, want 1", len(active))
+	}
+	if active[0].Name != "deep work" {
+		t.Errorf("Name = %q, want %q", active[0].Name, "deep work")
+	}
+	if active[0].Goal.Target != 240 || active[0].Goal.Unit != habit.Minutes {
+		t.Errorf("Goal = %+v, want 240 minutes", active[0].Goal)
+	}
+
+	// And it persisted, not just landed in memory.
+	saved, err := hs.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Active()) != 1 {
+		t.Errorf("habits.json holds %d habits, want 1", len(saved.Active()))
+	}
+}
+
+func TestFormKeepsWhatYouTypedOnAValidationError(t *testing.T) {
+	m, _, _ := habitModel(t)
+	press(m, "h")
+	press(m, "a")
+
+	typeInto(m, "reading")
+	tab(m)
+	typeInto(m, "banana")
+	enter(m)
+
+	if m.mode != modeHabitForm {
+		t.Fatal("an invalid goal was accepted")
+	}
+	if m.habitForm.err == "" {
+		t.Error("no error was shown")
+	}
+	if got := m.habitForm.value(fieldName); got != "reading" {
+		t.Errorf("name field = %q, want it preserved", got)
+	}
+	if len(m.habits.Active()) != 0 {
+		t.Error("an invalid habit was saved anyway")
+	}
+}
+
+func TestFormRejectsAnEmptyName(t *testing.T) {
+	m, _, _ := habitModel(t)
+	press(m, "h")
+	press(m, "a")
+	tab(m)
+	typeInto(m, "4h")
+	enter(m)
+
+	if m.mode != modeHabitForm {
+		t.Error("a habit with no name was accepted")
+	}
+}
+
+func TestFormRejectsABadColour(t *testing.T) {
+	m, _, _ := habitModel(t)
+	press(m, "h")
+	press(m, "a")
+	typeInto(m, "work")
+	tab(m)
+	typeInto(m, "4h")
+	tab(m)
+	typeInto(m, "reddish")
+	enter(m)
+
+	if m.mode != modeHabitForm {
+		t.Fatal("an unparseable colour was accepted")
+	}
+	if !strings.Contains(m.habitForm.err, "colour") {
+		t.Errorf("error = %q, want it to name the colour", m.habitForm.err)
+	}
+}
+
+func TestFormCancelDiscards(t *testing.T) {
+	m, _, _ := habitModel(t)
+	press(m, "h")
+	press(m, "a")
+	typeInto(m, "throwaway")
+	esc(m)
+
+	if m.mode != modeHabits {
+		t.Error("esc did not leave the form")
+	}
+	if len(m.habits.Active()) != 0 {
+		t.Error("a cancelled habit was saved")
+	}
+}
+
+func TestEditingAHabitKeepsItsIDAndHistory(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // make it active
+	press(m, "h")
+	press(m, "E")
+	if m.mode != modeHabitForm {
+		t.Fatal("E did not open the edit form")
+	}
+	// The form arrives pre-filled.
+	if got := m.habitForm.value(fieldName); got != "work" {
+		t.Fatalf("name field = %q, want it prefilled", got)
+	}
+	if got := m.habitForm.value(fieldGoal); got != "4h" {
+		t.Errorf("goal field = %q, want %q", got, "4h")
+	}
+
+	// Rename it.
+	for range "work" {
+		m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	typeInto(m, "deep work")
+	enter(m)
+
+	h, ok := m.habits.ByID("work")
+	if !ok {
+		t.Fatal("the habit lost its original ID, which would orphan its sessions")
+	}
+	if h.Name != "deep work" {
+		t.Errorf("Name = %q, want the rename applied", h.Name)
+	}
+	// The active label follows the rename.
+	if m.timer.Task != "deep work" {
+		t.Errorf("Task = %q, want it to track the renamed habit", m.timer.Task)
+	}
+}
+
+// A habit with history is archived so its sessions keep something to point at.
+func TestDeletingAHabitWithHistoryArchivesIt(t *testing.T) {
+	m, _, hs := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	tick(m, m.timer.Remaining+time.Second) // log a session
+	press(m, "h")
+	press(m, "d")
+
+	if m.mode != modeConfirm {
+		t.Fatal("d did not ask first")
+	}
+	if !strings.Contains(m.confirm.message, "Archive") {
+		t.Errorf("prompt = %q, want it to say archive for a habit with history", m.confirm.message)
+	}
+	press(m, "y")
+
+	if h, ok := m.habits.ByID("work"); !ok {
+		t.Error("the habit was removed outright, orphaning its sessions")
+	} else if !h.Archived {
+		t.Error("the habit was not archived")
+	}
+	if len(m.habits.Active()) != 0 {
+		t.Error("an archived habit is still in the picker")
+	}
+	saved, _ := hs.Load()
+	if h, ok := saved.ByID("work"); !ok || !h.Archived {
+		t.Error("the archive was not persisted")
+	}
+}
+
+func TestDeletingAnUnusedHabitRemovesIt(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	press(m, "d")
+
+	if !strings.Contains(m.confirm.message, "Delete") {
+		t.Errorf("prompt = %q, want it to say delete for a habit with no history", m.confirm.message)
+	}
+	press(m, "y")
+
+	if _, ok := m.habits.ByID("work"); ok {
+		t.Error("the habit survived deletion")
+	}
+}
+
+func TestConfirmCanBeDeclined(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	press(m, "d")
+	press(m, "n")
+
+	if m.mode != modeHabits {
+		t.Error("n did not return to the list")
+	}
+	if _, ok := m.habits.ByID("work"); !ok {
+		t.Error("the habit was removed despite declining")
+	}
+}
+
+func TestRemovingTheActiveHabitClearsIt(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	press(m, "h")
+	press(m, "d")
+	press(m, "y")
+
+	if m.activeID != "" {
+		t.Errorf("activeID = %q, want it cleared with the habit gone", m.activeID)
+	}
+	if _, active := m.activeHabit(); active {
+		t.Error("a removed habit is still reported active")
+	}
+}
+
+func TestFormAndConfirmScreensRender(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	sizeTo(m, 100, 40)
+
+	press(m, "h")
+	press(m, "a")
+	out := m.View()
+	for _, want := range []string{"NEW HABIT", "name", "goal", "colour", "save", "cancel"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("form is missing %q:\n%s", want, out)
+		}
+	}
+
+	esc(m)
+	press(m, "d")
+	out = m.View()
+	for _, want := range []string{"work", "yes", "no"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("confirm prompt is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestFormFieldNavigationWraps(t *testing.T) {
+	f := newHabitForm(nil)
+	last := len(f.fields) - 1
+
+	f.move(-1)
+	if f.cursor != last {
+		t.Errorf("cursor = %d after moving back from the first field, want %d", f.cursor, last)
+	}
+	f.move(1)
+	if f.cursor != 0 {
+		t.Errorf("cursor = %d, want it to wrap to 0", f.cursor)
+	}
+}
+
+func TestEditFormPrefillsOptionalFieldsOnlyWhenSet(t *testing.T) {
+	h := minutesHabit("work", 240)
+	h.ID = "work"
+	h.Focus = 50 * time.Minute
+
+	f := newHabitForm(&h)
+
+	if got := f.value(fieldFocus); got != "50m0s" {
+		t.Errorf("focus field = %q, want the override shown", got)
+	}
+	// An unset break must be blank, not "0s".
+	if got := f.value(fieldBreak); got != "" {
+		t.Errorf("break field = %q, want it empty", got)
+	}
+}

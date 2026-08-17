@@ -36,6 +36,8 @@ const (
 	modeNormal mode = iota
 	modeStats
 	modeHabits
+	modeHabitForm
+	modeConfirm
 	modeEditTask
 )
 
@@ -83,6 +85,10 @@ type Model struct {
 	// the timer behaves as it did before habits existed.
 	activeID    string
 	habitCursor int
+	// habitForm is the add/edit form; editingID is empty when adding.
+	habitForm *form
+	editingID string
+	confirm   confirmPrompt
 	// sessions is the replayed log, kept in memory so stats can be
 	// recomputed after each append without re-reading the file.
 	sessions []store.Session
@@ -364,8 +370,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	if m.mode == modeHabits {
+	switch m.mode {
+	case modeHabits:
 		m.habitsKey(msg)
+		return nil
+	case modeHabitForm:
+		m.formKey(msg)
+		return nil
+	case modeConfirm:
+		m.confirmKey(msg)
 		return nil
 	}
 
@@ -407,14 +420,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // cursorForActive puts the habit list cursor on whatever is currently active,
 // so opening the screen does not lose your place.
-func (m *Model) cursorForActive() int {
-	for i, h := range m.habits.Active() {
-		if h.ID == m.activeID {
-			return i
-		}
-	}
-	return 0
-}
+func (m *Model) cursorForActive() int { return m.cursorFor(m.activeID) }
 
 func (m *Model) habitsKey(msg tea.KeyMsg) {
 	active := m.habits.Active()
@@ -437,7 +443,131 @@ func (m *Model) habitsKey(msg tea.KeyMsg) {
 		if m.habitCursor < len(active) {
 			m.selectHabit(active[m.habitCursor].ID)
 		}
+	case "a":
+		m.habitForm = newHabitForm(nil)
+		m.editingID = ""
+		m.mode = modeHabitForm
+	case "E":
+		if m.habitCursor < len(active) {
+			h := active[m.habitCursor]
+			m.habitForm = newHabitForm(&h)
+			m.editingID = h.ID
+			m.mode = modeHabitForm
+		}
+	case "d":
+		if m.habitCursor < len(active) {
+			m.askToRemove(active[m.habitCursor])
+		}
 	}
+}
+
+func (m *Model) formKey(msg tea.KeyMsg) {
+	switch m.habitForm.key(msg) {
+	case formCancel:
+		m.habitForm = nil
+		m.mode = modeHabits
+	case formSave:
+		m.submitHabitForm()
+	}
+}
+
+// submitHabitForm validates and persists, staying in the form on failure so
+// nothing the user typed is thrown away.
+func (m *Model) submitHabitForm() {
+	h, err := habitFromForm(m.habitForm)
+	if err != nil {
+		m.habitForm.err = err.Error()
+		return
+	}
+
+	if m.editingID == "" {
+		added, err := m.habits.Add(h, time.Now())
+		if err != nil {
+			m.habitForm.err = err.Error()
+			return
+		}
+		m.habitCursor = m.cursorFor(added.ID)
+	} else {
+		h.ID = m.editingID
+		if err := m.habits.Update(h); err != nil {
+			m.habitForm.err = err.Error()
+			return
+		}
+		// The name may have changed, and the active label tracks it.
+		if m.activeID == h.ID {
+			m.timer.Task = h.Name
+			m.applyHabitTiming()
+		}
+	}
+
+	if err := m.saveHabits(); err != nil {
+		m.habitForm.err = err.Error()
+		return
+	}
+	m.habitForm = nil
+	m.mode = modeHabits
+}
+
+// askToRemove sets up the delete confirmation. A habit with logged sessions is
+// archived instead, so its history keeps a habit to point at.
+func (m *Model) askToRemove(h habit.Habit) {
+	logged := m.sessionsFor(h.ID)
+	prompt := confirmPrompt{}
+
+	if logged > 0 {
+		prompt.message = "Archive " + h.Name + "?"
+		prompt.detail = fmt.Sprintf(
+			"%d logged session(s) stay in your history. It leaves the list but its past is kept.", logged)
+		prompt.run = func() {
+			_ = m.habits.Archive(h.ID)
+			m.afterRemoval(h.ID)
+		}
+	} else {
+		prompt.message = "Delete " + h.Name + "?"
+		prompt.detail = "Nothing has been logged against it, so there is no history to keep."
+		prompt.run = func() {
+			_ = m.habits.Remove(h.ID)
+			m.afterRemoval(h.ID)
+		}
+	}
+
+	m.confirm = prompt
+	m.mode = modeConfirm
+}
+
+// afterRemoval persists and repairs the cursor and active selection.
+func (m *Model) afterRemoval(id string) {
+	if m.activeID == id {
+		m.activeID = ""
+	}
+	_ = m.saveHabits()
+	if n := len(m.habits.Active()); m.habitCursor >= n {
+		m.habitCursor = clampInt(n-1, 0, n)
+	}
+}
+
+func (m *Model) confirmKey(msg tea.KeyMsg) {
+	switch msg.String() {
+	case "y", "Y":
+		if m.confirm.run != nil {
+			m.confirm.run()
+		}
+		m.confirm = confirmPrompt{}
+		m.mode = modeHabits
+	case "n", "N", "esc", "q":
+		m.confirm = confirmPrompt{}
+		m.mode = modeHabits
+	}
+}
+
+// cursorFor puts the habit list cursor on a given habit.
+func (m *Model) cursorFor(id string) int {
+	for i, h := range m.habits.Active() {
+		if h.ID == id {
+			return i
+		}
+	}
+	return 0
 }
 
 func (m *Model) editKey(msg tea.KeyMsg) {
@@ -617,7 +747,11 @@ func (m *Model) View() string {
 		return StatsReport(pal, m.stats, m.store.Path())
 	case modeHabits:
 		return habitsView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID) +
-			"\n" + strings.Join(m.helpRowsFor(pal), "\n")
+			"\n" + habitsLegend(pal, len(m.habits.Active()) > 0)
+	case modeHabitForm:
+		return m.habitForm.view(pal) + "\n" + formLegend(pal)
+	case modeConfirm:
+		return m.confirm.view(pal)
 	}
 	if m.width > 0 && (m.width < m.geom.BandW+2 || m.height < m.requiredHeight()) {
 		return compactView(pal, m.timer, m.clockText(), m.stats)

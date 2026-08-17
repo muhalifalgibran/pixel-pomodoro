@@ -54,10 +54,16 @@ func (m *Model) hudView(pal theme.Palette) string {
 
 	rows := strings.Split(band.Render(pal.Panel), "\n")
 	content := make([]string, 0, len(rows)+3)
-	content = append(content, statusBar(pal, m.stats, m.geom.BandW))
+	content = append(content, statusBar(pal, m.stats, m.habitStreak(), m.geom.BandW))
 	content = append(content, rows...)
 	content = append(content, progressBar(pal, m.timer, m.geom.BandW))
-	content = append(content, taskLine(pal, m.displayTask(), m.mode == modeEditTask, m.resumed, m.geom.BandW))
+	// A habit shows its own goal progress; without one the free-text task line
+	// is what the timer had before habits existed.
+	if h, ok := m.activeHabit(); ok && m.mode != modeEditTask {
+		content = append(content, habitLine(pal, h, m.progress[h.ID], m.resumed, m.geom.BandW))
+	} else {
+		content = append(content, taskLine(pal, m.displayTask(), m.mode == modeEditTask, m.resumed, m.geom.BandW))
+	}
 
 	out := frameLines(pal, m.geom.BandW, content)
 	out = append(out, m.helpRowsFor(pal)...)
@@ -87,6 +93,15 @@ func (m *Model) requiredHeight() int {
 		help = helpRows
 	}
 	return 2 + 3 + m.geom.BandH/2 + help
+}
+
+// habitStreak is the streak the status bar shows: the active habit's own run of
+// met goals, or the global any-session streak when no habit is selected.
+func (m *Model) habitStreak() int {
+	if h, ok := m.activeHabit(); ok {
+		return m.progress[h.ID].Streak
+	}
+	return m.stats.Streak
 }
 
 func (m *Model) displayTask() string {

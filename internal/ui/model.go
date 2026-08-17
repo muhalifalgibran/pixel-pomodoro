@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/anim"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/config"
+	"github.com/muhalifalgibran/pixel-pomodoro/internal/habit"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/notify"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/sprite"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/store"
@@ -33,6 +35,7 @@ type mode int
 const (
 	modeNormal mode = iota
 	modeStats
+	modeHabits
 	modeEditTask
 )
 
@@ -42,6 +45,11 @@ type tickMsg time.Time
 type Options struct {
 	Config config.Config
 	Store  *store.Store
+	// Habits persists the habit definitions. A nil store means habits are
+	// unavailable, and the HUD falls back to a free-text task.
+	Habits *habit.Store
+	// HabitName preselects a habit by name, as `-habit work` does.
+	HabitName string
 	// Task pre-labels the first session.
 	Task string
 	// TickScale multiplies elapsed time. 1 is real time; higher values
@@ -65,6 +73,16 @@ type Model struct {
 
 	timer *timer.State
 	stats store.Stats
+
+	habitStore *habit.Store
+	habits     habit.List
+	// progress is recomputed whenever a session lands, so the HUD and the
+	// habit list never show a stale figure.
+	progress map[string]store.HabitProgress
+	// activeID is the habit sessions are logged against. Empty means none, and
+	// the timer behaves as it did before habits existed.
+	activeID    string
+	habitCursor int
 	// sessions is the replayed log, kept in memory so stats can be
 	// recomputed after each append without re-reading the file.
 	sessions []store.Session
@@ -119,6 +137,25 @@ func New(opts Options) (*Model, error) {
 
 	now := time.Now()
 
+	var habits habit.List
+	if opts.Habits != nil {
+		habits, err = opts.Habits.Load()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// An explicit -habit wins over whatever was active last time.
+	activeID := ""
+	if opts.HabitName != "" {
+		h, ok := habits.ByName(opts.HabitName)
+		if !ok {
+			return nil, unknownHabit(opts.HabitName, habits)
+		}
+		activeID = h.ID
+		t.Task = h.Name
+	}
+
 	// Pick up where the last session was left off. The phase start is restored
 	// too, so a session finished after resuming is logged against the time it
 	// actually began rather than this launch.
@@ -127,7 +164,7 @@ func New(opts Options) (*Model, error) {
 	if opts.Config.Resume && !opts.Fresh && !opts.SkipToEnd {
 		if saved, ok := opts.Store.LoadResume(now); ok {
 			if snap, ok := saved.Snapshot(); ok {
-				// An explicit -task overrides the remembered label.
+				// An explicit -task or -habit overrides what was remembered.
 				if opts.Task != "" {
 					snap.Task = opts.Task
 				}
@@ -135,6 +172,15 @@ func New(opts Options) (*Model, error) {
 					resumed = true
 					if !saved.PhaseStart.IsZero() {
 						phaseStart = saved.PhaseStart
+					}
+					if activeID == "" && saved.Habit != "" {
+						// Only honour a habit that still exists; a stale ID
+						// would log sessions against nothing.
+						if h, ok := habits.ByID(saved.Habit); ok && !h.Archived {
+							activeID = h.ID
+							snap.Task = h.Name
+							t.Task = h.Name
+						}
 					}
 				}
 			}
@@ -173,6 +219,9 @@ func New(opts Options) (*Model, error) {
 		timer:      t,
 		sessions:   sessions,
 		stats:      store.Compute(sessions, now),
+		habitStore: opts.Habits,
+		habits:     habits,
+		activeID:   activeID,
 		tomato:     tomato,
 		geom:       layout(tomato.Canvas.W, tomato.Canvas.H, clockW, clockH),
 		steam:      anim.NewSystem(steamPoolSize, now.UnixNano()),
@@ -190,7 +239,96 @@ func New(opts Options) (*Model, error) {
 	m.confetti.Gravity = 34
 	m.confetti.Drag = 0.6
 	m.clk.set(m.clockText())
+	m.refreshProgress(now)
+	m.applyHabitTiming()
 	return m, nil
+}
+
+// unknownHabit reports a name that matched nothing, listing what would have
+// worked rather than leaving the user to guess.
+func unknownHabit(name string, habits habit.List) error {
+	known := habits.Names()
+	if len(known) == 0 {
+		return fmt.Errorf("no habit named %q, and none are defined yet", name)
+	}
+	return fmt.Errorf("no habit named %q; try one of: %s", name, strings.Join(known, ", "))
+}
+
+// refreshProgress recomputes the per-habit figures from the in-memory log.
+func (m *Model) refreshProgress(now time.Time) {
+	m.progress = store.Progress(m.sessions, m.habits.Active(), now)
+}
+
+// activeHabit returns the habit sessions are being logged against.
+func (m *Model) activeHabit() (habit.Habit, bool) {
+	if m.activeID == "" {
+		return habit.Habit{}, false
+	}
+	return m.habits.ByID(m.activeID)
+}
+
+// timerConfig is the global timing policy with the active habit's overrides
+// applied. A habit leaves any of them at zero to inherit the global value.
+func (m *Model) timerConfig() timer.Config {
+	cfg := m.cfg.Timer()
+	h, ok := m.activeHabit()
+	if !ok {
+		return cfg
+	}
+	if h.Focus > 0 {
+		cfg.Focus = h.Focus
+	}
+	if h.Short > 0 {
+		cfg.ShortBreak = h.Short
+	}
+	if h.Long > 0 {
+		cfg.LongBreak = h.Long
+	}
+	return cfg
+}
+
+// applyHabitTiming rebuilds the timer against the active habit's lengths,
+// keeping the position it already had where that still fits.
+func (m *Model) applyHabitTiming() {
+	cfg := m.timerConfig()
+	if cfg == m.timer.Config() {
+		return
+	}
+	snap := m.timer.Snapshot()
+	t, err := timer.New(cfg)
+	if err != nil {
+		// A habit with a nonsense length should not take the program down; keep
+		// the timer that already works.
+		return
+	}
+	// Restore clamps a phase that the new lengths made shorter.
+	if err := t.Restore(snap); err != nil {
+		return
+	}
+	m.timer = t
+}
+
+// selectHabit makes a habit active. Anything meaningful already run in the
+// current phase is logged as abandoned first, so switching mid-session neither
+// loses the time nor credits it to the wrong habit.
+func (m *Model) selectHabit(id string) {
+	h, ok := m.habits.ByID(id)
+	if !ok {
+		return
+	}
+	if id != m.activeID {
+		if elapsed := m.timer.Elapsed(); elapsed >= time.Minute {
+			m.record(m.timer.Phase, elapsed, false)
+		}
+		m.activeID = id
+		m.timer.Task = h.Name
+		m.taskInput = h.Name
+		m.timer.Reset()
+		m.applyHabitTiming()
+		m.phaseStart = time.Now()
+	}
+	m.timer.Running = true
+	m.mode = modeNormal
 }
 
 // Init starts the render loop.
@@ -226,11 +364,19 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	if m.mode == modeHabits {
+		m.habitsKey(msg)
+		return nil
+	}
+
 	switch msg.String() {
 	case "ctrl+c", "q":
 		m.saveResume()
 		m.quitting = true
 		return tea.Quit
+	case "h":
+		m.mode = modeHabits
+		m.habitCursor = m.cursorForActive()
 	case "t":
 		if m.mode == modeStats {
 			m.mode = modeNormal
@@ -249,10 +395,49 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.timer.Reset()
 		m.phaseStart = time.Now()
 	case "e":
-		m.mode = modeEditTask
-		m.taskInput = m.timer.Task
+		// With a habit active the label is the habit's name, so editing it here
+		// would silently desync the two. Names are changed in the habit form.
+		if _, active := m.activeHabit(); !active {
+			m.mode = modeEditTask
+			m.taskInput = m.timer.Task
+		}
 	}
 	return nil
+}
+
+// cursorForActive puts the habit list cursor on whatever is currently active,
+// so opening the screen does not lose your place.
+func (m *Model) cursorForActive() int {
+	for i, h := range m.habits.Active() {
+		if h.ID == m.activeID {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *Model) habitsKey(msg tea.KeyMsg) {
+	active := m.habits.Active()
+
+	switch msg.String() {
+	case "ctrl+c", "q":
+		m.saveResume()
+		m.quitting = true
+	case "esc", "h":
+		m.mode = modeNormal
+	case "j", "down":
+		if len(active) > 0 {
+			m.habitCursor = (m.habitCursor + 1) % len(active)
+		}
+	case "k", "up":
+		if len(active) > 0 {
+			m.habitCursor = (m.habitCursor - 1 + len(active)) % len(active)
+		}
+	case "enter":
+		if m.habitCursor < len(active) {
+			m.selectHabit(active[m.habitCursor].ID)
+		}
+	}
 }
 
 func (m *Model) editKey(msg tea.KeyMsg) {
@@ -350,7 +535,7 @@ func (m *Model) saveResume() {
 	}
 	// Errors are dropped on purpose: failing to save your place must not stop
 	// the program exiting.
-	_ = m.store.SaveResume(store.NewResume(snap, m.phaseStart, time.Now()))
+	_ = m.store.SaveResume(store.NewResume(snap, m.activeID, m.phaseStart, time.Now()))
 }
 
 // record appends a finished phase to the log and refreshes the derived stats.
@@ -365,14 +550,17 @@ func (m *Model) record(phase timer.Phase, ran time.Duration, completed bool) {
 	sess := store.Session{
 		Start: m.phaseStart,
 		Mins:  mins,
+		Habit: m.activeID,
 		Task:  m.timer.Task,
 		Phase: phase.String(),
 		Done:  completed,
 	}
-	m.phaseStart = time.Now()
+	now := time.Now()
+	m.phaseStart = now
 
 	m.sessions = append(m.sessions, sess)
-	m.stats = store.Compute(m.sessions, time.Now())
+	m.stats = store.Compute(m.sessions, now)
+	m.refreshProgress(now)
 	// A failed write must not take the session down; the timer keeps running
 	// and the user still sees their progress for this run.
 	_ = m.store.Append(sess)
@@ -424,8 +612,12 @@ func (m *Model) View() string {
 	}
 	pal := m.palette()
 
-	if m.mode == modeStats {
+	switch m.mode {
+	case modeStats:
 		return StatsReport(pal, m.stats, m.store.Path())
+	case modeHabits:
+		return habitsView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID) +
+			"\n" + strings.Join(m.helpRowsFor(pal), "\n")
 	}
 	if m.width > 0 && (m.width < m.geom.BandW+2 || m.height < m.requiredHeight()) {
 		return compactView(pal, m.timer, m.clockText(), m.stats)

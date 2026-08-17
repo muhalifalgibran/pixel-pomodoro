@@ -8,6 +8,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/canvas"
+	"github.com/muhalifalgibran/pixel-pomodoro/internal/habit"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/store"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/theme"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/timer"
@@ -87,7 +88,7 @@ func meterFrac(filled, empty string, frac float64, width int) string {
 }
 
 // statusBar is the top line: level, XP progress and streak.
-func statusBar(pal theme.Palette, st store.Stats, width int) string {
+func statusBar(pal theme.Palette, st store.Stats, streak, width int) string {
 	accent := lipgloss.NewStyle().Foreground(lg(pal.Accent))
 	dim := lipgloss.NewStyle().Foreground(lg(pal.AccentDim))
 	text := lipgloss.NewStyle().Foreground(lg(pal.Text))
@@ -105,7 +106,7 @@ func statusBar(pal theme.Palette, st store.Stats, width int) string {
 		dim.Render(strings.Repeat("▯", xpBarWidth-filled)) +
 		" " + faint.Render(fmt.Sprintf("%dxp", st.XP))
 
-	right := faint.Render("STREAK ") + accent.Render(fmt.Sprintf("%dd", st.Streak)) + " "
+	right := faint.Render("STREAK ") + accent.Render(fmt.Sprintf("%dd", streak)) + " "
 
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -150,6 +151,41 @@ func progressBar(pal theme.Palette, s *timer.State, width int) string {
 // resumedNote marks a session picked up from a previous run, so the clock
 // starting at an odd number reads as intentional.
 const resumedNote = "↻ resumed"
+
+// habitGoalMeter is the width of the goal meter on the HUD's habit line.
+const habitGoalMeter = 10
+
+// habitLine replaces the task line when a habit is active: what you are working
+// on, and how far into today's goal it is.
+func habitLine(pal theme.Palette, h habit.Habit, p store.HabitProgress, resumed bool, width int) string {
+	accent := lipgloss.NewStyle().Foreground(lg(habitAccent(pal, h)))
+	dim := lipgloss.NewStyle().Foreground(lg(pal.AccentDim))
+	text := lipgloss.NewStyle().Foreground(lg(pal.Text))
+	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
+
+	full := 0
+	if p.Target > 0 {
+		full = clampInt(int(p.Fraction*float64(habitGoalMeter)), 0, habitGoalMeter)
+	}
+	meter := accent.Render(strings.Repeat("▰", full)) +
+		dim.Render(strings.Repeat("▱", habitGoalMeter-full))
+
+	left := "  " + accent.Render("▶ ") + text.Render(truncate(h.Name, 18)) +
+		"  " + faint.Render(progressText(h, p)) + "  " + meter
+
+	right := ""
+	if resumed {
+		right = faint.Render(resumedNote) + " "
+	}
+	if right == "" {
+		return pad(left, width)
+	}
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		return pad(left, width)
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
 
 // taskLine shows what the current session is for.
 func taskLine(pal theme.Palette, task string, editing, resumed bool, width int) string {
@@ -229,7 +265,11 @@ func helpBlock(pal theme.Palette, editing bool) []string {
 	// Order matters: hints fill downward, so the first six form two full
 	// columns and the toggle trails on its own rather than stranding a
 	// primary key in a near-empty third column.
-	parts := []string{"space pause", "s skip", "r reset", "e task", "t stats", "q quit", "/ hide"}
+	parts := []string{
+		"space pause", "s skip", "r reset",
+		"h habits", "t stats", "e note",
+		"q quit", "/ hide",
+	}
 	if editing {
 		parts = []string{"enter save", "esc cancel"}
 	}

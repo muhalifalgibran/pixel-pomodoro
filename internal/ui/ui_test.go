@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/config"
+	"github.com/muhalifalgibran/pixel-pomodoro/internal/habit"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/store"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/theme"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/timer"
@@ -205,12 +206,12 @@ func TestHelpBlockIsAGridOfColumns(t *testing.T) {
 		t.Fatalf("helpBlock returned %d rows, want %d", len(rows), helpRows)
 	}
 
-	// Hints fill downward, so the first three land in column one and the next
-	// three in column two, with the toggle trailing in a third.
+	// Hints fill downward: three per column, so eight entries make three
+	// columns of 3, 3 and 2.
 	wantContents := [helpRows][]string{
-		{"space", "task", "hide"},
-		{"skip", "stats"},
-		{"reset", "quit"},
+		{"space", "habits", "quit"},
+		{"skip", "stats", "hide"},
+		{"reset", "note"},
 	}
 	for i, want := range wantContents {
 		for _, w := range want {
@@ -888,5 +889,325 @@ func TestSteamIsFocusOnly(t *testing.T) {
 	}
 	if breathFor(timer.Focus, false).steamHz != 0 {
 		t.Error("a paused timer still emits steam")
+	}
+}
+
+// --- habits ---
+
+func habitModel(t *testing.T, goals ...habit.Habit) (*Model, *store.Store, *habit.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	hs := habit.NewStore(filepath.Join(dir, "habits.json"))
+
+	var l habit.List
+	base := time.Now().Add(-time.Hour)
+	for i, h := range goals {
+		if _, err := l.Add(h, base.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatalf("Add(%q): %v", h.Name, err)
+		}
+	}
+	if err := hs.Save(l); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(dir, "sessions.jsonl"))
+
+	m, err := New(Options{Config: cfg, Store: st, Habits: hs, TickScale: 1})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return m, st, hs
+}
+
+func minutesHabit(name string, mins int) habit.Habit {
+	return habit.Habit{Name: name, Goal: habit.Goal{Target: mins, Unit: habit.Minutes, Period: habit.Daily}}
+}
+
+func sessionsHabit(name string, n int) habit.Habit {
+	return habit.Habit{Name: name, Goal: habit.Goal{Target: n, Unit: habit.Sessions, Period: habit.Daily}}
+}
+
+func TestHabitsScreenListsEveryHabit(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240), sessionsHabit("reading", 1))
+	sizeTo(m, 100, 40)
+
+	press(m, "h")
+	if m.mode != modeHabits {
+		t.Fatal("h did not open the habits screen")
+	}
+
+	out := m.View()
+	for _, want := range []string{"HABITS", "work", "reading", "4h"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("habits screen is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestHabitsCursorMovesAndWraps(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240), sessionsHabit("reading", 1))
+	press(m, "h")
+
+	if m.habitCursor != 0 {
+		t.Fatalf("cursor starts at %d, want 0", m.habitCursor)
+	}
+	press(m, "j")
+	if m.habitCursor != 1 {
+		t.Errorf("cursor = %d after j, want 1", m.habitCursor)
+	}
+	press(m, "j")
+	if m.habitCursor != 0 {
+		t.Errorf("cursor = %d, want it to wrap to 0", m.habitCursor)
+	}
+	press(m, "k")
+	if m.habitCursor != 1 {
+		t.Errorf("cursor = %d after k from the top, want it to wrap to 1", m.habitCursor)
+	}
+}
+
+func TestSelectingAHabitStartsItAndLogsAgainstIt(t *testing.T) {
+	m, st, _ := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.mode != modeNormal {
+		t.Error("selecting a habit did not return to the HUD")
+	}
+	if m.activeID != "work" {
+		t.Fatalf("activeID = %q, want work", m.activeID)
+	}
+	if !m.timer.Running {
+		t.Error("selecting a habit did not start the timer")
+	}
+	if m.timer.Task != "work" {
+		t.Errorf("Task = %q, want the habit's name", m.timer.Task)
+	}
+
+	// Run a focus phase to completion and check where it landed.
+	tick(m, m.timer.Remaining+time.Second)
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) == 0 {
+		t.Fatal("no session was logged")
+	}
+	if got := sessions[0].Habit; got != "work" {
+		t.Errorf("logged habit = %q, want work", got)
+	}
+}
+
+func TestHabitProgressReachesTheHUD(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	sizeTo(m, 100, 40)
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Complete one 25 minute focus.
+	tick(m, m.timer.Remaining+time.Second)
+
+	if got := m.progress["work"].Value; got != 25 {
+		t.Errorf("progress Value = %d, want 25 minutes", got)
+	}
+	out := m.View()
+	if !strings.Contains(out, "work") {
+		t.Errorf("HUD does not name the active habit:\n%s", out)
+	}
+	// The habit line spells out progress against the goal.
+	if !strings.Contains(out, "25m / 4h") {
+		t.Errorf("HUD does not show goal progress:\n%s", out)
+	}
+}
+
+// Switching habits mid-phase must neither lose the time nor credit it to the
+// habit being switched to.
+func TestSwitchingHabitsLogsTheAbandonedTimeToTheOldOne(t *testing.T) {
+	m, st, _ := habitModel(t, minutesHabit("work", 240), sessionsHabit("reading", 1))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // work
+	tick(m, 5*time.Minute)
+
+	press(m, "h")
+	press(m, "j")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // reading
+
+	if m.activeID != "reading" {
+		t.Fatalf("activeID = %q, want reading", m.activeID)
+	}
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("logged %d sessions, want the abandoned one", len(sessions))
+	}
+	if sessions[0].Habit != "work" {
+		t.Errorf("abandoned time went to %q, want work", sessions[0].Habit)
+	}
+	if sessions[0].Done {
+		t.Error("abandoned time was logged as completed")
+	}
+	// The new habit starts clean.
+	if m.timer.Elapsed() != 0 {
+		t.Errorf("new habit started %v in", m.timer.Elapsed())
+	}
+}
+
+func TestPerHabitTimerLengthsApply(t *testing.T) {
+	long := minutesHabit("work", 240)
+	long.Focus = 50 * time.Minute
+	long.Short = 10 * time.Minute
+	m, _, _ := habitModel(t, long, sessionsHabit("reading", 1))
+
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := m.timer.Config().Focus; got != 50*time.Minute {
+		t.Errorf("focus = %v, want the habit's 50m override", got)
+	}
+	if got := m.timer.Config().ShortBreak; got != 10*time.Minute {
+		t.Errorf("short break = %v, want the habit's 10m override", got)
+	}
+
+	// A habit with no overrides inherits the global lengths.
+	press(m, "h")
+	press(m, "j")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := m.timer.Config().Focus; got != config.Default().Focus {
+		t.Errorf("focus = %v, want the global default %v", got, config.Default().Focus)
+	}
+}
+
+func TestStatusBarStreakFollowsTheActiveHabit(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+
+	// No habit selected: the global any-session streak.
+	if got, want := m.habitStreak(), m.stats.Streak; got != want {
+		t.Errorf("streak = %d, want the global %d with no habit active", got, want)
+	}
+
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got, want := m.habitStreak(), m.progress["work"].Streak; got != want {
+		t.Errorf("streak = %d, want the habit's %d", got, want)
+	}
+}
+
+func TestEmptyHabitsScreenPointsAtAdding(t *testing.T) {
+	m, _, _ := habitModel(t)
+	sizeTo(m, 100, 40)
+
+	press(m, "h")
+	out := m.View()
+
+	if !strings.Contains(out, "No habits yet") {
+		t.Errorf("empty state is missing:\n%s", out)
+	}
+	if !strings.Contains(out, "add") {
+		t.Errorf("empty state does not point at adding one:\n%s", out)
+	}
+}
+
+// With no habits at all the timer must behave exactly as it did before habits
+// existed. This must not become a tool you configure before it runs.
+func TestHUDWorksWithNoHabits(t *testing.T) {
+	m, _, _ := habitModel(t)
+	sizeTo(m, 100, 40)
+	m.timer.Task = "free text"
+
+	out := m.View()
+
+	if !strings.Contains(out, "free text") {
+		t.Errorf("free-text task line is gone:\n%s", out)
+	}
+	if _, active := m.activeHabit(); active {
+		t.Error("a habit is active despite none being defined")
+	}
+}
+
+// The label belongs to the habit, so e must not let it drift out of sync.
+func TestNoteKeyIsInertWhileAHabitIsActive(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	press(m, "e")
+
+	if m.mode == modeEditTask {
+		t.Error("e opened the task editor while a habit was active")
+	}
+	if m.timer.Task != "work" {
+		t.Errorf("Task = %q, want it still tied to the habit", m.timer.Task)
+	}
+}
+
+func TestActiveHabitSurvivesAQuitAndRelaunch(t *testing.T) {
+	m, st, hs := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	tick(m, 5*time.Minute)
+	press(m, "q")
+
+	cfg := config.Default()
+	cfg.Notify = false
+	cfg.Sound = ""
+	second, err := New(Options{Config: cfg, Store: st, Habits: hs, StartRunning: true})
+	if err != nil {
+		t.Fatalf("New() on relaunch error = %v", err)
+	}
+
+	if second.activeID != "work" {
+		t.Errorf("activeID = %q, want the habit to be resumed too", second.activeID)
+	}
+}
+
+func TestHabitFlagSelectsByName(t *testing.T) {
+	dir := t.TempDir()
+	hs := habit.NewStore(filepath.Join(dir, "habits.json"))
+	var l habit.List
+	l.Add(minutesHabit("Vibe Antarta", 60), time.Now())
+	if err := hs.Save(l); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(dir, "sessions.jsonl"))
+
+	m, err := New(Options{Config: cfg, Store: st, Habits: hs, HabitName: "vibe antarta"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if m.activeID != "vibe-antarta" {
+		t.Errorf("activeID = %q, want vibe-antarta", m.activeID)
+	}
+
+	// An unknown name fails, and says what would have worked.
+	_, err = New(Options{Config: cfg, Store: st, Habits: hs, HabitName: "nope"})
+	if err == nil {
+		t.Fatal("New() accepted an unknown habit name")
+	}
+	if !strings.Contains(err.Error(), "Vibe Antarta") {
+		t.Errorf("error = %v, want it to list the known habits", err)
+	}
+}
+
+func TestHabitRowsFitTheFrame(t *testing.T) {
+	m, _, _ := habitModel(t,
+		minutesHabit("a habit with a very long name indeed", 240),
+		sessionsHabit("gym", 3),
+	)
+	press(m, "h")
+
+	for i, line := range strings.Split(habitsView(theme.Ember, m.habits.Active(), m.progress, 0, ""), "\n") {
+		if got := lipgloss.Width(line); got > m.geom.BandW+2 {
+			t.Errorf("habit row %d is %d cells wide, wider than the %d-cell frame",
+				i, got, m.geom.BandW+2)
+		}
 	}
 }

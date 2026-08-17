@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/config"
+	"github.com/muhalifalgibran/pixel-pomodoro/internal/habit"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/selfupdate"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/store"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/theme"
@@ -57,6 +58,7 @@ type flags struct {
 	every      int
 	themeName  string
 	task       string
+	habitName  string
 
 	noSound     bool
 	noNotify    bool
@@ -67,14 +69,15 @@ type flags struct {
 
 	// Development and verification affordances. They ship deliberately: they
 	// are what makes the timer debuggable without waiting 25 minutes.
-	demo      bool
-	mono      bool
-	demoText  string
-	svgPath   string
-	svgPixel  int
-	statsOnly bool
-	tickScale float64
-	skipToEnd bool
+	demo       bool
+	mono       bool
+	demoText   string
+	svgPath    string
+	svgPixel   int
+	statsOnly  bool
+	habitsOnly bool
+	tickScale  float64
+	skipToEnd  bool
 }
 
 func run() error {
@@ -92,7 +95,8 @@ func run() error {
 	flag.DurationVar(&f.longBreak, "long-break", 15*time.Minute, "long break length")
 	flag.IntVar(&f.every, "long-break-every", 4, "focus sessions per long break")
 	flag.StringVar(&f.themeName, "theme", "ember", "palette: ember, mint or indigo")
-	flag.StringVar(&f.task, "task", "", "label for this session")
+	flag.StringVar(&f.task, "task", "", "free-text label for this session")
+	flag.StringVar(&f.habitName, "habit", "", "start on a named habit")
 
 	flag.BoolVar(&f.noSound, "no-sound", false, "disable the completion sound")
 	flag.BoolVar(&f.noNotify, "no-notify", false, "disable desktop notifications")
@@ -107,6 +111,7 @@ func run() error {
 	flag.StringVar(&f.svgPath, "svg", "", "with -demo, write the art to this SVG file instead of the terminal")
 	flag.IntVar(&f.svgPixel, "svg-pixel", 6, "with -demo -svg, the size in SVG units of one art pixel")
 	flag.BoolVar(&f.statsOnly, "stats", false, "print stats and exit")
+	flag.BoolVar(&f.habitsOnly, "habits", false, "print the habit list and progress, then exit")
 	flag.Float64Var(&f.tickScale, "tick-scale", 1, "multiply elapsed time; 60 fast-forwards a cycle into seconds")
 	flag.BoolVar(&f.skipToEnd, "skip-to-end", false, "start one second from the end of a 1m phase, to verify completion")
 
@@ -143,8 +148,17 @@ func run() error {
 	}
 	st := store.New(logPath)
 
+	habitPath, err := habit.DefaultPath()
+	if err != nil {
+		return err
+	}
+	habits := habit.NewStore(habitPath)
+
 	if f.statsOnly {
 		return printStats(cfg, st)
+	}
+	if f.habitsOnly {
+		return printHabits(cfg, st, habits)
 	}
 
 	// Launching a timer means you want it running; -paused is for when you
@@ -152,6 +166,8 @@ func run() error {
 	model, err := ui.New(ui.Options{
 		Config:       cfg,
 		Store:        st,
+		Habits:       habits,
+		HabitName:    f.habitName,
 		Task:         f.task,
 		TickScale:    f.tickScale,
 		StartRunning: !f.paused,
@@ -212,6 +228,24 @@ func printStats(cfg config.Config, st *store.Store) error {
 	fmt.Println(ui.StatsReport(pal, store.Compute(sessions, time.Now()), st.Path()))
 	if skipped > 0 {
 		fmt.Fprintf(os.Stderr, "\npomo: skipped %d unreadable line(s) in %s\n", skipped, st.Path())
+	}
+	return nil
+}
+
+func printHabits(cfg config.Config, st *store.Store, hs *habit.Store) error {
+	list, err := hs.Load()
+	if err != nil {
+		return err
+	}
+	sessions, _, err := st.Load()
+	if err != nil {
+		return err
+	}
+	pal, _ := theme.ByName(cfg.Theme)
+	active := list.Active()
+	fmt.Print(ui.HabitsReport(pal, active, store.Progress(sessions, active, time.Now())))
+	if len(active) > 0 {
+		fmt.Printf("\n  habits  %s\n", hs.Path())
 	}
 	return nil
 }

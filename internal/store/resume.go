@@ -30,6 +30,9 @@ type Resume struct {
 	CycleIndex int    `json:"cycle_index"`
 	Completed  int    `json:"completed"`
 	Task       string `json:"task,omitempty"`
+	// Habit is the stable ID of the habit that was active, so relaunching
+	// resumes the same one rather than dropping back to nothing.
+	Habit string `json:"habit,omitempty"`
 	// PhaseStart is when the current phase began, so a session finished after
 	// resuming is logged with its real start time.
 	PhaseStart time.Time `json:"phase_start"`
@@ -136,8 +139,9 @@ func (r Resume) Snapshot() (timer.Snapshot, bool) {
 }
 
 // NewResume builds the persisted form of a snapshot.
-func NewResume(snap timer.Snapshot, phaseStart, now time.Time) Resume {
+func NewResume(snap timer.Snapshot, habitID string, phaseStart, now time.Time) Resume {
 	return Resume{
+		Habit:      habitID,
 		Phase:      snap.Phase.String(),
 		RemainingS: int(snap.Remaining.Round(time.Second) / time.Second),
 		Running:    snap.Running,

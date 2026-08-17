@@ -30,7 +30,7 @@ func TestResumeRoundTrip(t *testing.T) {
 	now := time.Date(2026, 8, 17, 15, 0, 0, 0, time.UTC)
 	start := now.Add(-13 * time.Minute)
 
-	if err := s.SaveResume(NewResume(sampleSnapshot(), start, now)); err != nil {
+	if err := s.SaveResume(NewResume(sampleSnapshot(), "", start, now)); err != nil {
 		t.Fatalf("SaveResume() error = %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestLoadResumeMissingFile(t *testing.T) {
 func TestLoadResumeIgnoresStaleState(t *testing.T) {
 	s := resumeStore(t)
 	saved := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
-	if err := s.SaveResume(NewResume(sampleSnapshot(), saved, saved)); err != nil {
+	if err := s.SaveResume(NewResume(sampleSnapshot(), "", saved, saved)); err != nil {
 		t.Fatalf("SaveResume() error = %v", err)
 	}
 
@@ -92,7 +92,7 @@ func TestLoadResumeIgnoresStaleState(t *testing.T) {
 func TestLoadResumeIgnoresFutureTimestamps(t *testing.T) {
 	s := resumeStore(t)
 	now := time.Date(2026, 8, 17, 15, 0, 0, 0, time.UTC)
-	if err := s.SaveResume(NewResume(sampleSnapshot(), now, now.Add(time.Hour))); err != nil {
+	if err := s.SaveResume(NewResume(sampleSnapshot(), "", now, now.Add(time.Hour))); err != nil {
 		t.Fatalf("SaveResume() error = %v", err)
 	}
 	if _, ok := s.LoadResume(now); ok {
@@ -131,7 +131,7 @@ func TestLoadResumeRejectsUnusableFiles(t *testing.T) {
 func TestClearResume(t *testing.T) {
 	s := resumeStore(t)
 	now := time.Now()
-	if err := s.SaveResume(NewResume(sampleSnapshot(), now, now)); err != nil {
+	if err := s.SaveResume(NewResume(sampleSnapshot(), "", now, now)); err != nil {
 		t.Fatalf("SaveResume() error = %v", err)
 	}
 	if err := s.ClearResume(); err != nil {
@@ -151,7 +151,7 @@ func TestSaveResumeLeavesNoTemporaryFiles(t *testing.T) {
 	s := resumeStore(t)
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		if err := s.SaveResume(NewResume(sampleSnapshot(), now, now)); err != nil {
+		if err := s.SaveResume(NewResume(sampleSnapshot(), "", now, now)); err != nil {
 			t.Fatalf("SaveResume() error = %v", err)
 		}
 	}
@@ -174,13 +174,13 @@ func TestResumeSurvivesRepeatedSaves(t *testing.T) {
 	now := time.Now()
 
 	first := sampleSnapshot()
-	if err := s.SaveResume(NewResume(first, now, now)); err != nil {
+	if err := s.SaveResume(NewResume(first, "", now, now)); err != nil {
 		t.Fatalf("SaveResume() error = %v", err)
 	}
 	second := first
 	second.Remaining = 90 * time.Second
 	second.Phase = timer.ShortBreak
-	if err := s.SaveResume(NewResume(second, now, now)); err != nil {
+	if err := s.SaveResume(NewResume(second, "", now, now)); err != nil {
 		t.Fatalf("SaveResume() error = %v", err)
 	}
 

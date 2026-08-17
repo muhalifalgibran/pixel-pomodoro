@@ -845,6 +845,12 @@ func (m *Model) paletteTarget() theme.Palette {
 	return theme.For(m.timer.Phase)
 }
 
+// withLegend puts the three-row key grid under a screen's content.
+func withLegend(pal theme.Palette, body string, keys []string) string {
+	return strings.TrimRight(body, "\n") + "\n\n" +
+		strings.Join(helpBlock(pal, keys), "\n")
+}
+
 // statsWidth is the width the stats screen may use. Before the first
 // WindowSizeMsg the terminal size is unknown, so fall back to the frame width
 // the HUD already assumes.
@@ -869,16 +875,21 @@ func (m *Model) View() string {
 	}
 	pal := m.palette()
 
+	// Every screen's hints use the same three-row grid, so the block never
+	// changes shape as you move between them.
 	switch m.mode {
 	case modeStats:
-		return StatsReport(pal, m.stats, m.habits.Active(), m.progress, m.store.Path(), m.statsWidth())
+		return withLegend(pal,
+			StatsReport(pal, m.stats, m.habits.Active(), m.progress, m.store.Path(), m.statsWidth()),
+			statsKeys)
 	case modeHabits:
-		return habitsView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID) +
-			"\n" + habitsLegend(pal, len(m.habits.Active()) > 0)
+		return withLegend(pal,
+			habitsView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID),
+			habitsKeysFor(len(m.habits.Active()) > 0))
 	case modeHabitForm:
-		return m.habitForm.view(pal) + "\n" + formLegend(pal)
+		return withLegend(pal, m.habitForm.view(pal), formKeys)
 	case modeConfirm:
-		return m.confirm.view(pal)
+		return withLegend(pal, m.confirm.view(pal), confirmKeys)
 	}
 	if m.width > 0 && (m.width < m.geom.BandW+2 || m.height < m.requiredHeight()) {
 		return compactView(pal, m.timer, m.clockText(), m.stats)

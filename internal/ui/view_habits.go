@@ -58,8 +58,6 @@ func habitsView(pal theme.Palette, habits []habit.Habit, progress map[string]sto
 			b.WriteString("    " + accent.Render(padPlain(ex[0], 14)) +
 				faint.Render(ex[1]) + "\n")
 		}
-		b.WriteString("\n  " + accent.Render("a") + faint.Render(" add one") +
-			faint.Render("   ") + accent.Render("esc") + faint.Render(" back") + "\n")
 		return b.String()
 	}
 
@@ -70,33 +68,13 @@ func habitsView(pal theme.Palette, habits []habit.Habit, progress map[string]sto
 	return b.String()
 }
 
-// habitsLegend is the key hints for the habit list. The picking keys are
-// suppressed when there is nothing to pick.
-func habitsLegend(pal theme.Palette, any bool) string {
+// habitsKeysFor picks the habit list's key set. The picking keys are suppressed
+// when there is nothing to pick.
+func habitsKeysFor(any bool) []string {
 	if !any {
-		return keyHints(pal, []string{"a add", "esc back"})
+		return habitsEmptyKeys
 	}
-	return keyHints(pal, []string{
-		"j/k move", "enter start", "a add", "E edit", "d delete", "esc back",
-	})
-}
-
-// formLegend is the key hints for the add/edit form.
-func formLegend(pal theme.Palette) string {
-	return keyHints(pal, []string{"tab field", "enter save", "esc cancel"})
-}
-
-// keyHints renders one line of "key description" pairs, styling the key.
-func keyHints(pal theme.Palette, parts []string) string {
-	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
-	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
-
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		word, rest, _ := strings.Cut(p, " ")
-		out = append(out, key.Render(word)+faint.Render(" "+rest))
-	}
-	return "  " + strings.Join(out, faint.Render("   "))
+	return habitsKeys
 }
 
 // habitRow renders one line of the habit list.

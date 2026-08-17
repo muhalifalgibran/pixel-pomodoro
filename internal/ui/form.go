@@ -160,16 +160,13 @@ type confirmPrompt struct {
 // view renders the prompt.
 func (c confirmPrompt) view(pal theme.Palette) string {
 	title := lipgloss.NewStyle().Foreground(lg(pal.Text)).Bold(true)
-	accent := lipgloss.NewStyle().Foreground(lg(pal.Accent))
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
 
 	var b strings.Builder
 	b.WriteString(title.Render(c.message))
 	b.WriteString("\n\n")
 	if c.detail != "" {
-		b.WriteString("  " + faint.Render(c.detail) + "\n\n")
+		b.WriteString("  " + faint.Render(c.detail) + "\n")
 	}
-	b.WriteString("  " + accent.Render("y") + faint.Render(" yes   ") +
-		accent.Render("n") + faint.Render(" or ") + accent.Render("esc") + faint.Render(" no") + "\n")
 	return b.String()
 }

@@ -287,12 +287,20 @@ const helpRows = 3
 // rather than one run-on line.
 const helpColumnGap = 4
 
-// helpHint is the one-line stand-in shown when the legend is hidden. Hiding it
-// entirely would leave no way to discover the toggle again.
+// helpHint stands in for the legend when it is hidden. Hiding it entirely would
+// leave no way to discover the toggle again.
+//
+// It is padded to helpRows so the view's height does not change with the
+// toggle. The frame sits above the legend and so never moves either way, but a
+// constant height keeps the compact-layout threshold from depending on whether
+// the legend happens to be open.
 func helpHint(pal theme.Palette) []string {
 	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
-	return []string{" " + key.Render("/") + faint.Render(" keys")}
+
+	rows := make([]string, helpRows)
+	rows[0] = " " + key.Render("/") + faint.Render(" keys")
+	return rows
 }
 
 // Key sets for each screen. Order matters: hints fill downward, so entries are
@@ -309,6 +317,15 @@ var (
 		"q quit", "/ hide",
 	}
 	editingKeys = []string{"enter save", "esc cancel"}
+
+	habitsKeys = []string{
+		"j/k move", "enter start", "a add",
+		"E edit", "d delete", "esc back",
+	}
+	habitsEmptyKeys = []string{"a add", "esc back"}
+	formKeys        = []string{"tab field", "enter save", "esc cancel"}
+	confirmKeys     = []string{"y yes", "n no", "esc cancel"}
+	statsKeys       = []string{"t back", "esc back", "q quit"}
 )
 
 // helpBlock lays the key hints out as a grid. A single long line pushed the

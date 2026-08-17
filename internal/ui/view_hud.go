@@ -106,14 +106,13 @@ func (m *Model) helpRowsFor(pal theme.Palette) []string {
 }
 
 // requiredHeight is the rows the full HUD needs: two borders, the status bar,
-// the art band, the progress and task lines, and however many rows the legend
-// currently occupies.
+// the art band, the progress and task lines, and the legend.
+//
+// The legend is always helpRows tall, collapsed or not, so this does not change
+// as the user toggles it — the layout it falls back to should not depend on
+// that.
 func (m *Model) requiredHeight() int {
-	help := 1
-	if m.showHelp || m.mode == modeEditTask {
-		help = helpRows
-	}
-	return 2 + 3 + m.geom.BandH/2 + help
+	return 2 + 3 + m.geom.BandH/2 + helpRows
 }
 
 // breath is the mascot's idle motion for whatever is running.

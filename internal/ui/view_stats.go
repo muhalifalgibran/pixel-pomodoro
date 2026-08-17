@@ -80,8 +80,6 @@ func StatsReport(pal theme.Palette, st store.Stats, habits []habit.Habit, progre
 	}
 
 	b.WriteString("\n  " + faint.Render("log  ") + dim.Render(logPath) + "\n")
-	b.WriteString("\n  " + accent.Render("t") + faint.Render(" or ") + accent.Render("esc") + faint.Render(" back  ·  ") +
-		accent.Render("q") + faint.Render(" quit"))
 
 	return b.String()
 }

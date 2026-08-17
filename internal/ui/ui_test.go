@@ -230,22 +230,34 @@ func TestHelpBlockIsAGridOfColumns(t *testing.T) {
 	}
 }
 
-// The block must never be wider than the HUD it sits under.
-func TestHelpBlockFitsUnderTheFrame(t *testing.T) {
+// No screen's legend may be wider than the HUD it sits under. This is the
+// failure the original single-line legend had.
+func TestEveryLegendFitsUnderTheFrame(t *testing.T) {
 	m, _ := testModel(t, nil)
 	frameWidth := m.geom.BandW + 2
-	pal := theme.Ember
 
-	for _, editing := range []bool{false, true} {
-		keys := timerKeys
-		if editing {
-			keys = editingKeys
-		}
-		for i, r := range helpBlock(pal, keys) {
+	sets := map[string][]string{
+		"timer":        timerKeys,
+		"zen":          zenKeys,
+		"editing":      editingKeys,
+		"habits":       habitsKeys,
+		"habits empty": habitsEmptyKeys,
+		"form":         formKeys,
+		"confirm":      confirmKeys,
+		"stats":        statsKeys,
+	}
+	for name, keys := range sets {
+		for i, r := range helpBlock(theme.Ember, keys) {
 			if got := lipgloss.Width(r); got > frameWidth {
-				t.Errorf("editing=%v row %d is %d cells wide, wider than the %d-cell frame",
-					editing, i, got, frameWidth)
+				t.Errorf("%s legend row %d is %d cells wide, wider than the %d-cell frame",
+					name, i, got, frameWidth)
 			}
+		}
+	}
+	// The collapsed hint too.
+	for i, r := range helpHint(theme.Ember) {
+		if got := lipgloss.Width(r); got > frameWidth {
+			t.Errorf("collapsed hint row %d is %d cells wide, wider than the frame", i, got)
 		}
 	}
 }
@@ -781,15 +793,18 @@ func TestSlashTogglesTheLegend(t *testing.T) {
 	}
 	collapsed := strings.Split(m.View(), "\n")
 
-	if len(collapsed) >= len(full) {
-		t.Errorf("collapsed view is %d lines, want fewer than %d", len(collapsed), len(full))
+	// The height does not change: the block is helpRows tall either way, so the
+	// layout the HUD falls back to cannot depend on the toggle.
+	if len(collapsed) != len(full) {
+		t.Errorf("collapsed view is %d lines, want the same %d", len(collapsed), len(full))
 	}
-	if strings.Contains(collapsed[len(collapsed)-1], "pause") {
+	tail := strings.Join(collapsed[len(collapsed)-helpRows:], "\n")
+	if strings.Contains(tail, "pause") {
 		t.Error("the legend is still showing after being hidden")
 	}
 	// Hiding it entirely would leave no way back.
-	if !strings.Contains(collapsed[len(collapsed)-1], "keys") {
-		t.Errorf("no hint about the toggle once hidden: %q", collapsed[len(collapsed)-1])
+	if !strings.Contains(tail, "keys") {
+		t.Errorf("no hint about the toggle once hidden: %q", tail)
 	}
 
 	press(m, "/")
@@ -813,18 +828,84 @@ func TestEditingShowsTheKeysEvenWhenHidden(t *testing.T) {
 	}
 }
 
-func TestRequiredHeightTracksTheLegend(t *testing.T) {
+// The legend is always helpRows tall, so the height the HUD needs is fixed and
+// the compact fallback cannot flip just because the legend was toggled.
+func TestRequiredHeightDoesNotDependOnTheLegendToggle(t *testing.T) {
 	m, _ := testModel(t, nil)
 
 	shown := m.requiredHeight()
 	press(m, "/")
 	hidden := m.requiredHeight()
 
-	if hidden >= shown {
-		t.Errorf("hiding the legend did not reduce the required height: %d then %d", shown, hidden)
+	if shown != hidden {
+		t.Errorf("required height changed from %d to %d when the legend was hidden", shown, hidden)
 	}
-	if got, want := shown-hidden, helpRows-1; got != want {
-		t.Errorf("height changed by %d, want %d", got, want)
+
+	press(m, "e") // editing shows the legend regardless of the toggle
+	if got := m.requiredHeight(); got != shown {
+		t.Errorf("required height changed to %d while editing, want %d", got, shown)
+	}
+}
+
+// Every screen's hints use the same grid, so the block never changes shape as
+// you move between them.
+func TestEveryScreensLegendIsTheSameHeight(t *testing.T) {
+	for _, keys := range [][]string{
+		timerKeys, zenKeys, editingKeys,
+		habitsKeys, habitsEmptyKeys, formKeys, confirmKeys, statsKeys,
+	} {
+		rows := helpBlock(theme.Ember, keys)
+		if len(rows) != helpRows {
+			t.Errorf("key set %v rendered %d rows, want %d", keys, len(rows), helpRows)
+		}
+		// And the rows within one block line up.
+		want := lipgloss.Width(rows[0])
+		for i, r := range rows {
+			if got := lipgloss.Width(r); got != want {
+				t.Errorf("key set %v row %d is %d cells wide, want %d", keys, i, got, want)
+			}
+		}
+	}
+}
+
+func TestHelpHintIsPaddedToTheGridHeight(t *testing.T) {
+	rows := helpHint(theme.Ember)
+	if len(rows) != helpRows {
+		t.Fatalf("helpHint returned %d rows, want %d", len(rows), helpRows)
+	}
+	if !strings.Contains(rows[0], "keys") {
+		t.Errorf("the hint is not on the first row: %q", rows[0])
+	}
+}
+
+// Each screen reachable by a keypress ends in a three-row legend.
+func TestEveryScreenEndsInAThreeRowLegend(t *testing.T) {
+	screens := []struct {
+		name string
+		open func(*Model)
+		want string
+	}{
+		{"habits", func(m *Model) { press(m, "h") }, "add"},
+		{"stats", func(m *Model) { press(m, "t") }, "quit"},
+		{"form", func(m *Model) { press(m, "h"); press(m, "a") }, "save"},
+		{"confirm", func(m *Model) { press(m, "h"); press(m, "d") }, "yes"},
+		{"zen", func(m *Model) { press(m, "z") }, "stop"},
+	}
+	for _, sc := range screens {
+		t.Run(sc.name, func(t *testing.T) {
+			m, _, _ := habitModel(t, minutesHabit("work", 240))
+			sizeTo(m, 100, 40)
+			sc.open(m)
+
+			lines := strings.Split(m.View(), "\n")
+			if len(lines) < helpRows {
+				t.Fatalf("view is only %d lines", len(lines))
+			}
+			tail := strings.Join(lines[len(lines)-helpRows:], "\n")
+			if !strings.Contains(tail, sc.want) {
+				t.Errorf("the %s legend is missing %q:\n%s", sc.name, sc.want, tail)
+			}
+		})
 	}
 }
 

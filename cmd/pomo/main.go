@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/config"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/habit"
@@ -155,7 +156,7 @@ func run() error {
 	habits := habit.NewStore(habitPath)
 
 	if f.statsOnly {
-		return printStats(cfg, st)
+		return printStats(cfg, st, habits)
 	}
 	if f.habitsOnly {
 		return printHabits(cfg, st, habits)
@@ -219,17 +220,34 @@ func applyFlags(cfg *config.Config, f flags) {
 	}
 }
 
-func printStats(cfg config.Config, st *store.Store) error {
+func printStats(cfg config.Config, st *store.Store, hs *habit.Store) error {
 	sessions, skipped, err := st.Load()
 	if err != nil {
 		return err
 	}
+	list, err := hs.Load()
+	if err != nil {
+		return err
+	}
 	pal, _ := theme.ByName(cfg.Theme)
-	fmt.Println(ui.StatsReport(pal, store.Compute(sessions, time.Now()), st.Path()))
+	now := time.Now()
+	active := list.Active()
+	fmt.Println(ui.StatsReport(pal, store.Compute(sessions, now), active,
+		store.Progress(sessions, active, now), st.Path(), terminalWidth()))
 	if skipped > 0 {
 		fmt.Fprintf(os.Stderr, "\npomo: skipped %d unreadable line(s) in %s\n", skipped, st.Path())
 	}
 	return nil
+}
+
+// terminalWidth is the width to lay non-interactive output out for. The stats
+// bars shrink rather than overhang, so a piped or unknown-width terminal gets
+// the standard frame width instead of a guess.
+func terminalWidth() int {
+	if w, _, err := term.GetSize(os.Stdout.Fd()); err == nil && w > 0 {
+		return w
+	}
+	return 0
 }
 
 func printHabits(cfg config.Config, st *store.Store, hs *habit.Store) error {

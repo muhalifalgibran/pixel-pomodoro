@@ -731,6 +731,16 @@ func (m *Model) palette() theme.Palette {
 	return theme.Lerp(m.palFrom, m.palTo, anim.EaseOutQuad(m.palT))
 }
 
+// statsWidth is the width the stats screen may use. Before the first
+// WindowSizeMsg the terminal size is unknown, so fall back to the frame width
+// the HUD already assumes.
+func (m *Model) statsWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	return m.geom.BandW + 2
+}
+
 func (m *Model) clockText() string {
 	return FormatRemaining(m.timer.Remaining, m.cfg.ShowSeconds)
 }
@@ -744,7 +754,7 @@ func (m *Model) View() string {
 
 	switch m.mode {
 	case modeStats:
-		return StatsReport(pal, m.stats, m.store.Path())
+		return StatsReport(pal, m.stats, m.habits.Active(), m.progress, m.store.Path(), m.statsWidth())
 	case modeHabits:
 		return habitsView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID) +
 			"\n" + habitsLegend(pal, len(m.habits.Active()) > 0)

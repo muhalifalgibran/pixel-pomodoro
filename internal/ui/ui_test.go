@@ -1502,3 +1502,136 @@ func TestEditFormPrefillsOptionalFieldsOnlyWhenSet(t *testing.T) {
 		t.Errorf("break field = %q, want it empty", got)
 	}
 }
+
+// --- contribution bars ---
+
+func TestContributionBarShowsOneCellPerDay(t *testing.T) {
+	h := minutesHabit("work", 240)
+	h.ID = "work"
+	p := store.HabitProgress{Window: 30, Days: make([]store.DayCell, store.ChartDays)}
+	for i := range p.Days {
+		p.Days[i].Level = store.LevelMet
+	}
+
+	line := contributionBar(theme.Ember, h, p, store.ChartDays)
+
+	if got := strings.Count(line, barGlyphs[store.LevelMet]); got != store.ChartDays {
+		t.Errorf("bar holds %d met cells, want %d", got, store.ChartDays)
+	}
+}
+
+func TestContributionBarUsesADistinctGlyphPerLevel(t *testing.T) {
+	h := minutesHabit("work", 240)
+	h.ID = "work"
+	p := store.HabitProgress{
+		Window: 4,
+		Days: []store.DayCell{
+			{Level: store.LevelNone},
+			{Level: store.LevelLow},
+			{Level: store.LevelMid},
+			{Level: store.LevelMet},
+		},
+	}
+
+	line := contributionBar(theme.Ember, h, p, 4)
+
+	// Each glyph appears, so intensity reads without relying on colour.
+	for level, glyph := range barGlyphs {
+		if !strings.Contains(line, glyph) {
+			t.Errorf("level %d glyph %q is missing from %q", level, glyph, line)
+		}
+	}
+}
+
+func TestContributionBarKeepsTheMostRecentDays(t *testing.T) {
+	h := minutesHabit("work", 240)
+	h.ID = "work"
+	p := store.HabitProgress{Window: 30, Days: make([]store.DayCell, store.ChartDays)}
+	// Only the final day was met.
+	p.Days[len(p.Days)-1].Level = store.LevelMet
+
+	line := contributionBar(theme.Ember, h, p, 7)
+
+	if !strings.Contains(line, barGlyphs[store.LevelMet]) {
+		t.Errorf("a truncated bar dropped the most recent day: %q", line)
+	}
+}
+
+func TestBarDaysShrinksForNarrowTerminals(t *testing.T) {
+	if got := barDays(200); got != barMaxDays {
+		t.Errorf("barDays(200) = %d, want the full %d", got, barMaxDays)
+	}
+	if got := barDays(40); got >= barMaxDays {
+		t.Errorf("barDays(40) = %d, want fewer than %d", got, barMaxDays)
+	}
+	if got := barDays(10); got != barMinDays {
+		t.Errorf("barDays(10) = %d, want the floor of %d", got, barMinDays)
+	}
+	// An unknown width falls back to the full stretch rather than the floor.
+	if got := barDays(0); got != barMaxDays {
+		t.Errorf("barDays(0) = %d, want %d", got, barMaxDays)
+	}
+}
+
+// The bars must fit under the frame at any terminal size, which is the failure
+// the key legend had.
+func TestContributionBarsFitTheFrame(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("a very long habit name here", 240), sessionsHabit("gym", 3))
+
+	for _, width := range []int{40, 60, 80, 120} {
+		days := barDays(width)
+		for _, h := range m.habits.Active() {
+			line := contributionBar(theme.Ember, h, m.progress[h.ID], days)
+			if got := lipgloss.Width(line); got > width {
+				t.Errorf("at width %d the bar for %q is %d cells wide", width, h.Name, got)
+			}
+		}
+	}
+}
+
+func TestStatsScreenShowsABarPerHabit(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240), sessionsHabit("reading", 1))
+	sizeTo(m, 100, 40)
+
+	press(m, "t")
+	out := m.View()
+
+	for _, want := range []string{"LAST", "work", "reading", "goal met"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stats screen is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Without habits there are no goals to shade against, so the plain activity
+// chart is the honest fallback.
+func TestStatsScreenFallsBackToTheChartWithNoHabits(t *testing.T) {
+	m, _, _ := habitModel(t)
+	sizeTo(m, 100, 40)
+
+	press(m, "t")
+	out := m.View()
+
+	if strings.Contains(out, "goal met") {
+		t.Error("the goal-shading key is shown with no goals defined")
+	}
+	if !strings.Contains(out, "Last") {
+		t.Errorf("the fallback chart is missing:\n%s", out)
+	}
+}
+
+func TestStatsScreenReportsZenSeparately(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	sizeTo(m, 100, 40)
+	m.stats.ZenWeekMins = 80
+
+	press(m, "t")
+	out := m.View()
+
+	if !strings.Contains(out, "Zen") {
+		t.Errorf("zen time is not accounted for:\n%s", out)
+	}
+	if !strings.Contains(out, "1h 20m") {
+		t.Errorf("zen total is wrong:\n%s", out)
+	}
+}

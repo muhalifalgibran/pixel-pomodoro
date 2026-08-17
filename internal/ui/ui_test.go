@@ -1939,3 +1939,55 @@ func TestZenNeverAlerts(t *testing.T) {
 		}
 	}
 }
+
+// A habit's focus override lives in the timer, not the global config. Reading
+// the wrong one logged 25 minutes for a completed 50 minute session, so the
+// habit's progress advanced by half of what was actually worked.
+func TestCompletedPhaseLogsTheHabitsOwnLength(t *testing.T) {
+	long := minutesHabit("work", 240)
+	long.Focus = 50 * time.Minute
+	m, st, _ := habitModel(t, long)
+
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := m.timer.Config().Focus; got != 50*time.Minute {
+		t.Fatalf("timer focus = %v, want the 50m override", got)
+	}
+
+	tick(m, m.timer.Remaining+time.Second)
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) == 0 {
+		t.Fatal("no session was logged")
+	}
+	if got := sessions[0].Mins; got != 50 {
+		t.Errorf("logged %d minutes, want the habit's 50", got)
+	}
+	if got := m.progress["work"].Value; got != 50 {
+		t.Errorf("habit progress = %d, want 50", got)
+	}
+}
+
+// The same applies to a break with its own override.
+func TestCompletedBreakLogsTheHabitsOwnLength(t *testing.T) {
+	h := minutesHabit("work", 240)
+	h.Focus = time.Minute
+	h.Short = 10 * time.Minute
+	m, st, _ := habitModel(t, h)
+
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	tick(m, m.timer.Remaining+time.Second) // finish focus, break auto-starts
+	tick(m, m.timer.Remaining+time.Second) // finish the break
+
+	sessions, _, _ := st.Load()
+	if len(sessions) < 2 {
+		t.Fatalf("logged %d sessions, want the focus and the break", len(sessions))
+	}
+	if got := sessions[1].Mins; got != 10 {
+		t.Errorf("break logged %d minutes, want the habit's 10", got)
+	}
+}

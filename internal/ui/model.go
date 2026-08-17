@@ -706,8 +706,11 @@ func (m *Model) advance(now time.Time) {
 		}
 	} else {
 		for _, ev := range m.timer.Advance(scaled) {
-			// A phase that ended on its own ran its full configured length.
-			m.record(ev.Ended, m.cfg.Timer().Duration(ev.Ended), ev.Completed)
+			// A phase that ended on its own ran its full length — and that
+			// length comes from the timer's own config, not the global one. A
+			// habit's focus override lives only in the timer, so reading the
+			// global config here logged 25 minutes for a 50 minute session.
+			m.record(ev.Ended, m.timer.Config().Duration(ev.Ended), ev.Completed)
 			m.onPhaseChange(ev)
 		}
 	}

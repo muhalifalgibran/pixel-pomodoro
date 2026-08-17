@@ -22,11 +22,42 @@ func newHabitForm(h *habit.Habit) *form {
 	f := &form{
 		title: "NEW HABIT",
 		fields: []field{
-			{label: "name", hint: "work"},
-			{label: "goal", hint: "4h, 90m, 1 session, 3 sessions / week"},
-			{label: "colour", hint: "#ff7043 — optional"},
-			{label: "focus", hint: "25m — optional, overrides the default"},
-			{label: "break", hint: "5m — optional"},
+			{
+				label: "name",
+				hint:  "what you call it",
+				help:  []string{"work", "reading time", "vibe antarta"},
+			},
+			{
+				label:   "goal",
+				hint:    "how much, how often",
+				preview: previewGoal,
+				help: []string{
+					"1 session          one focus session a day",
+					"3 sessions         three a day",
+					"4h                 four hours a day",
+					"90m                ninety minutes a day",
+					"3 sessions / week  three in a week",
+					"10h / week         ten hours across the week",
+				},
+			},
+			{
+				label: "colour",
+				hint:  "optional",
+				help:  []string{"#ff7043  warm orange", "#7fb3c8  cool blue", "leave empty to use the theme"},
+			},
+			{
+				label: "focus",
+				hint:  "optional",
+				help: []string{
+					"50m  a longer focus phase for this habit",
+					"leave empty to use the default (" + defaultFocusHint + ")",
+				},
+			},
+			{
+				label: "break",
+				hint:  "optional",
+				help:  []string{"10m  a longer break for this habit", "leave empty to use the default"},
+			},
 		},
 	}
 	if h != nil {
@@ -38,6 +69,23 @@ func newHabitForm(h *habit.Habit) *form {
 		f.fields[fieldBreak].value = durationField(h.Short)
 	}
 	return f
+}
+
+// defaultFocusHint names the global default in the form, so "optional" says
+// what you get by leaving it blank.
+const defaultFocusHint = "25m"
+
+// previewGoal interprets the goal field as it is typed. Showing what the input
+// resolved to teaches the syntax faster than the examples do.
+func previewGoal(v string) string {
+	if v == "" {
+		return ""
+	}
+	g, err := habit.ParseGoal(v)
+	if err != nil {
+		return "not a goal yet"
+	}
+	return g.Describe()
 }
 
 // durationField renders an optional duration, leaving zero blank rather than

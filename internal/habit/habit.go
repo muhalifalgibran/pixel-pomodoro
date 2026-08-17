@@ -63,6 +63,24 @@ func (g Goal) String() string {
 	return head
 }
 
+// Describe spells a goal out as a sentence fragment, for the form's live
+// preview: "4h a day", "1 session a day", "3 sessions a week".
+func (g Goal) Describe() string {
+	var amount string
+	if g.Unit == Sessions {
+		amount = strconv.Itoa(g.Target) + " session"
+		if g.Target != 1 {
+			amount += "s"
+		}
+	} else {
+		amount = FormatMinutes(g.Target)
+	}
+	if g.Period == Weekly {
+		return amount + " a week"
+	}
+	return amount + " a day"
+}
+
 // Short renders a goal compactly for the habit list, where the column is tight.
 func (g Goal) Short() string {
 	var head string

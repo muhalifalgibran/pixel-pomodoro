@@ -22,9 +22,17 @@ const (
 type field struct {
 	label string
 	value string
-	// hint shows when the field is empty, to say what belongs there without
-	// needing a separate help screen.
+	// hint is placeholder text shown while the field is empty. It stays visible
+	// when the field is focused: a hint that vanishes the moment you start
+	// filling in the field is no help at all.
 	hint string
+	// help is worked examples, listed under the form while this field is
+	// focused. One per line — a comma-separated run of examples reads as a
+	// single value.
+	help []string
+	// preview interprets what has been typed so far, so the syntax can be
+	// learned by watching rather than by reading the examples.
+	preview func(string) string
 }
 
 // form is a small vertical group of text fields. It is deliberately minimal:
@@ -102,10 +110,18 @@ func (f *form) view(pal theme.Palette) string {
 		if i == f.cursor {
 			marker = accent.Render("▸ ")
 		}
-		body := text.Render(fl.value)
-		if i == f.cursor {
-			body += accent.Render("█")
-		} else if fl.value == "" {
+		// The placeholder shows whenever the field is empty, focused or not, and
+		// starts at the same column a real value would, so the fields line up.
+		var body string
+		switch {
+		case fl.value != "":
+			body = text.Render(fl.value)
+			if i == f.cursor {
+				body += accent.Render("█")
+			}
+		case i == f.cursor:
+			body = accent.Render("█") + faint.Render(" "+fl.hint)
+		default:
 			body = faint.Render(fl.hint)
 		}
 		b.WriteString(marker + faint.Render(padPlain(fl.label, labelWidth)) + body + "\n")
@@ -113,6 +129,22 @@ func (f *form) view(pal theme.Palette) string {
 
 	if f.err != "" {
 		b.WriteString("\n  " + warn.Render("× "+f.err) + "\n")
+	}
+
+	cur := f.fields[f.cursor]
+
+	// What the current value actually means, updated as it is typed.
+	if cur.preview != nil {
+		if note := cur.preview(strings.TrimSpace(cur.value)); note != "" {
+			b.WriteString("\n  " + faint.Render("→ ") + accent.Render(note) + "\n")
+		}
+	}
+
+	if len(cur.help) > 0 {
+		b.WriteString("\n  " + faint.Render(cur.label+" — for example") + "\n")
+		for _, line := range cur.help {
+			b.WriteString("    " + faint.Render(line) + "\n")
+		}
 	}
 	return b.String()
 }

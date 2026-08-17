@@ -49,11 +49,16 @@ func habitsView(pal theme.Palette, habits []habit.Habit, progress map[string]sto
 	b.WriteString("\n\n")
 
 	if len(habits) == 0 {
-		b.WriteString("  " + faint.Render("No habits yet.") + "\n")
-		b.WriteString("  " + faint.Render("A habit is a name and a daily target, like ") +
-			accent.Render("work") + faint.Render(" for ") + accent.Render("4h") +
-			faint.Render(" a day.") + "\n\n")
-		b.WriteString("  " + accent.Render("a") + faint.Render(" add one") +
+		b.WriteString("  " + faint.Render("No habits yet. A habit is a name and a target:") + "\n\n")
+		for _, ex := range [][2]string{
+			{"reading time", "1 session"},
+			{"work", "4h"},
+			{"gym", "3 sessions / week"},
+		} {
+			b.WriteString("    " + accent.Render(padPlain(ex[0], 14)) +
+				faint.Render(ex[1]) + "\n")
+		}
+		b.WriteString("\n  " + accent.Render("a") + faint.Render(" add one") +
 			faint.Render("   ") + accent.Render("esc") + faint.Render(" back") + "\n")
 		return b.String()
 	}

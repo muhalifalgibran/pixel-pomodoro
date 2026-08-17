@@ -180,15 +180,20 @@ A habit is a name and a target. Press `h` then `a` to add one; there is nothing
 to configure before pomo will run, and with no habits at all it behaves exactly
 like a plain pomodoro timer.
 
-Goals are written the way you would say them:
+Goals are written the way you would say them, and the form shows you what it
+read as you type — `4h` becomes `→ 4h a day`, nonsense becomes
+`→ not a goal yet`:
 
-| Goal | Means |
+| Type this | Means |
 | --- | --- |
 | `1 session` | one completed focus session a day |
 | `3 sessions` | three a day |
-| `4h`, `90m`, `1h 30m` | that much focused time a day |
+| `4h` | four hours of focused time a day |
+| `90m` or `1h 30m` | ninety minutes a day |
 | `3 sessions / week` | three in a calendar week, Monday to Sunday |
 | `10h / week` | ten hours across the week |
+
+A bare number counts sessions, so `3` is the same as `3 sessions`.
 
 A habit can also carry its own **focus length**, so `work` runs 50/10 while
 `reading` runs 25/5, and its own **accent colour**.

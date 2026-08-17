@@ -1248,7 +1248,7 @@ func TestAddingAHabitThroughTheForm(t *testing.T) {
 	enter(m)
 
 	if m.mode != modeHabits {
-		t.Fatalf("mode = %v after saving, want the habit list; error was %q", m.mode, m.habitForm)
+		t.Fatalf("mode = %v after saving, want the habit list; error was %q", m.mode, m.habitForm.err)
 	}
 	active := m.habits.Active()
 	if len(active) != 1 {
@@ -1989,5 +1989,108 @@ func TestCompletedBreakLogsTheHabitsOwnLength(t *testing.T) {
 	}
 	if got := sessions[1].Mins; got != 10 {
 		t.Errorf("break logged %d minutes, want the habit's 10", got)
+	}
+}
+
+// The goal syntax is the one thing in the form that has to be learned, so the
+// examples must be visible while the field is being filled in — the earlier
+// version hid the hint the moment the field took focus.
+func TestGoalFieldShowsItsExamplesWhileFocused(t *testing.T) {
+	f := newHabitForm(nil)
+	f.cursor = fieldGoal
+
+	out := f.view(theme.Ember)
+
+	for _, want := range []string{
+		"1 session", "3 sessions", "4h", "90m", "/ week", "for example",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("goal help is missing %q:\n%s", want, out)
+		}
+	}
+	// And still visible once something has been typed.
+	f.fields[fieldGoal].value = "4h"
+	if !strings.Contains(f.view(theme.Ember), "for example") {
+		t.Error("the examples vanished once the field had a value")
+	}
+}
+
+func TestGoalPreviewInterpretsWhatWasTyped(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"4h", "4h a day"},
+		{"90m", "1h 30m a day"},
+		{"1 session", "1 session a day"},
+		{"3", "3 sessions a day"},
+		{"3 sessions / week", "3 sessions a week"},
+		{"10h / week", "10h a week"},
+		{"banana", "not a goal yet"},
+		{"4", "4 sessions a day"},
+	}
+	for _, tt := range tests {
+		if got := previewGoal(tt.in); got != tt.want {
+			t.Errorf("previewGoal(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestGoalPreviewReachesTheForm(t *testing.T) {
+	f := newHabitForm(nil)
+	f.cursor = fieldGoal
+	f.fields[fieldGoal].value = "3 sessions / week"
+
+	out := f.view(theme.Ember)
+
+	if !strings.Contains(out, "3 sessions a week") {
+		t.Errorf("the form does not say what the goal was read as:\n%s", out)
+	}
+}
+
+// Every field earns some guidance; an unexplained field is a field people
+// leave blank because they do not know what it wants.
+func TestEveryFormFieldHasAHintAndExamples(t *testing.T) {
+	for i, fl := range newHabitForm(nil).fields {
+		if fl.hint == "" {
+			t.Errorf("field %d (%q) has no placeholder", i, fl.label)
+		}
+		if len(fl.help) == 0 {
+			t.Errorf("field %d (%q) has no examples", i, fl.label)
+		}
+	}
+}
+
+func TestOptionalFieldsSayTheyAreOptional(t *testing.T) {
+	f := newHabitForm(nil)
+	for _, i := range []int{fieldColor, fieldFocus, fieldBreak} {
+		if !strings.Contains(f.fields[i].hint, "optional") {
+			t.Errorf("field %q does not say it is optional", f.fields[i].label)
+		}
+	}
+	// And the required ones do not.
+	for _, i := range []int{fieldName, fieldGoal} {
+		if strings.Contains(f.fields[i].hint, "optional") {
+			t.Errorf("required field %q is labelled optional", f.fields[i].label)
+		}
+	}
+}
+
+func TestGoalDescribe(t *testing.T) {
+	tests := []struct {
+		goal habit.Goal
+		want string
+	}{
+		{habit.Goal{Target: 1, Unit: habit.Sessions, Period: habit.Daily}, "1 session a day"},
+		{habit.Goal{Target: 3, Unit: habit.Sessions, Period: habit.Daily}, "3 sessions a day"},
+		{habit.Goal{Target: 240, Unit: habit.Minutes, Period: habit.Daily}, "4h a day"},
+		{habit.Goal{Target: 3, Unit: habit.Sessions, Period: habit.Weekly}, "3 sessions a week"},
+		{habit.Goal{Target: 600, Unit: habit.Minutes, Period: habit.Weekly}, "10h a week"},
+	}
+	for _, tt := range tests {
+		if got := tt.goal.Describe(); got != tt.want {
+			t.Errorf("Describe(%+v) = %q, want %q", tt.goal, got, tt.want)
+		}
 	}
 }

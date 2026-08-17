@@ -1,0 +1,124 @@
+name: release
+
+# Publishing prebuilt binaries is what lets people run pomo without installing
+# Go: the binary is static and the art is embedded, so a download is enough.
+on:
+  push:
+    tags: ['v*']
+  # Allows re-running a release by hand if a build fails partway.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build a release for'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - run: go test ./...
+
+      - name: Build every target
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          # CGO_ENABLED=0 keeps the binary static, so it runs on any machine of
+          # that OS and architecture with no libc version to match.
+          # -s -w strips the symbol table and DWARF, roughly halving the size.
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name="pomo"
+            [ "$os" = "windows" ] && name="pomo.exe"
+
+            # The extracted directory carries the version as well as the
+            # archive, so the documented `mv pomo_v1.2.3_*/pomo` works and two
+            # versions cannot collide when unpacked side by side.
+            base="pomo_${TAG}_${os}_${arch}"
+            mkdir -p "dist/$base"
+
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build \
+              -trimpath \
+              -ldflags "-s -w -X main.version=${TAG}" \
+              -o "dist/$base/$name" ./cmd/pomo
+
+            cp README.md LICENSE "dist/$base/"
+
+            if [ "$os" = "windows" ]; then
+              (cd dist && zip -qr "$base.zip" "$base")
+            else
+              tar -czf "dist/$base.tar.gz" -C dist "$base"
+            fi
+            echo "built $target"
+          done
+
+          (cd dist && sha256sum ./*.tar.gz ./*.zip > checksums.txt)
+          ls -la dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes=$(cat <<'EOF'
+          ## Install
+
+          Already on v0.1.1 or later:
+
+          ```sh
+          pomo --update
+          ```
+
+          Otherwise, no Go toolchain needed — these are static binaries.
+
+          **macOS / Linux**
+
+          ```sh
+          # pick the file matching your machine, then:
+          tar -xzf pomo_*.tar.gz
+          sudo mv pomo_*/pomo /usr/local/bin/pomo
+          pomo
+          ```
+
+          On macOS, Gatekeeper will block an unsigned download the first time.
+          Clear it with:
+
+          ```sh
+          xattr -d com.apple.quarantine /usr/local/bin/pomo
+          ```
+
+          **With Go**
+
+          ```sh
+          go install github.com/muhalifalgibran/pixel-pomodoro/cmd/pomo@latest
+          ```
+
+          Verify a download against `checksums.txt`:
+
+          ```sh
+          sha256sum -c checksums.txt --ignore-missing
+          ```
+          EOF
+          )
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "$notes" \
+            --generate-notes \
+            dist/*.tar.gz dist/*.zip dist/checksums.txt

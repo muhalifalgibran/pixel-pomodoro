@@ -262,11 +262,38 @@ func TestEveryLegendFitsUnderTheFrame(t *testing.T) {
 	}
 }
 
-// Editing mode has fewer hints than rows; the block must still be helpRows
-// tall so the layout does not jump when entering and leaving the task field.
-func TestHelpBlockHeightIsStableAcrossModes(t *testing.T) {
-	if got := len(helpBlock(theme.Ember, editingKeys)); got != helpRows {
-		t.Errorf("editing help is %d rows, want %d", got, helpRows)
+// Short sets stay on one line; only longer ones need the grid. Stacking two or
+// three hints into a narrow column reads as a list rather than a legend.
+func TestShortKeySetsStayOnOneLine(t *testing.T) {
+	short := map[string][]string{
+		"editing":      editingKeys,
+		"habits empty": habitsEmptyKeys,
+		"form":         formKeys,
+		"confirm":      confirmKeys,
+		"stats":        statsKeys,
+	}
+	for name, keys := range short {
+		if len(keys) > helpInlineMax {
+			t.Fatalf("%s has %d keys, which is not a short set", name, len(keys))
+		}
+		if got := len(helpBlock(theme.Ember, keys)); got != 1 {
+			t.Errorf("%s legend is %d rows, want 1", name, got)
+		}
+	}
+}
+
+func TestLongKeySetsUseTheGrid(t *testing.T) {
+	for name, keys := range map[string][]string{
+		"timer":  timerKeys,
+		"zen":    zenKeys,
+		"habits": habitsKeys,
+	} {
+		if len(keys) <= helpInlineMax {
+			t.Fatalf("%s has only %d keys", name, len(keys))
+		}
+		if got := len(helpBlock(theme.Ember, keys)); got != helpRows {
+			t.Errorf("%s legend is %d rows, want %d", name, got, helpRows)
+		}
 	}
 }
 
@@ -793,12 +820,10 @@ func TestSlashTogglesTheLegend(t *testing.T) {
 	}
 	collapsed := strings.Split(m.View(), "\n")
 
-	// The height does not change: the block is helpRows tall either way, so the
-	// layout the HUD falls back to cannot depend on the toggle.
-	if len(collapsed) != len(full) {
-		t.Errorf("collapsed view is %d lines, want the same %d", len(collapsed), len(full))
+	if len(collapsed) >= len(full) {
+		t.Errorf("collapsed view is %d lines, want fewer than %d", len(collapsed), len(full))
 	}
-	tail := strings.Join(collapsed[len(collapsed)-helpRows:], "\n")
+	tail := collapsed[len(collapsed)-1]
 	if strings.Contains(tail, "pause") {
 		t.Error("the legend is still showing after being hidden")
 	}
@@ -847,18 +872,13 @@ func TestRequiredHeightDoesNotDependOnTheLegendToggle(t *testing.T) {
 	}
 }
 
-// Every screen's hints use the same grid, so the block never changes shape as
-// you move between them.
-func TestEveryScreensLegendIsTheSameHeight(t *testing.T) {
+// Whichever layout a set gets, its rows must line up with each other.
+func TestLegendRowsWithinASetAreAligned(t *testing.T) {
 	for _, keys := range [][]string{
 		timerKeys, zenKeys, editingKeys,
 		habitsKeys, habitsEmptyKeys, formKeys, confirmKeys, statsKeys,
 	} {
 		rows := helpBlock(theme.Ember, keys)
-		if len(rows) != helpRows {
-			t.Errorf("key set %v rendered %d rows, want %d", keys, len(rows), helpRows)
-		}
-		// And the rows within one block line up.
 		want := lipgloss.Width(rows[0])
 		for i, r := range rows {
 			if got := lipgloss.Width(r); got != want {
@@ -868,18 +888,18 @@ func TestEveryScreensLegendIsTheSameHeight(t *testing.T) {
 	}
 }
 
-func TestHelpHintIsPaddedToTheGridHeight(t *testing.T) {
+func TestHelpHintIsASingleLine(t *testing.T) {
 	rows := helpHint(theme.Ember)
-	if len(rows) != helpRows {
-		t.Fatalf("helpHint returned %d rows, want %d", len(rows), helpRows)
+	if len(rows) != 1 {
+		t.Fatalf("helpHint returned %d rows, want 1", len(rows))
 	}
 	if !strings.Contains(rows[0], "keys") {
-		t.Errorf("the hint is not on the first row: %q", rows[0])
+		t.Errorf("the hint does not mention the toggle: %q", rows[0])
 	}
 }
 
-// Each screen reachable by a keypress ends in a three-row legend.
-func TestEveryScreenEndsInAThreeRowLegend(t *testing.T) {
+// Each screen reachable by a keypress ends in a legend naming its own keys.
+func TestEveryScreenEndsInItsOwnLegend(t *testing.T) {
 	screens := []struct {
 		name string
 		open func(*Model)
@@ -901,6 +921,7 @@ func TestEveryScreenEndsInAThreeRowLegend(t *testing.T) {
 			if len(lines) < helpRows {
 				t.Fatalf("view is only %d lines", len(lines))
 			}
+			// The legend is at most helpRows tall, so look in that window.
 			tail := strings.Join(lines[len(lines)-helpRows:], "\n")
 			if !strings.Contains(tail, sc.want) {
 				t.Errorf("the %s legend is missing %q:\n%s", sc.name, sc.want, tail)

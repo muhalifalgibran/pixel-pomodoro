@@ -290,17 +290,12 @@ const helpColumnGap = 4
 // helpHint stands in for the legend when it is hidden. Hiding it entirely would
 // leave no way to discover the toggle again.
 //
-// It is padded to helpRows so the view's height does not change with the
-// toggle. The frame sits above the legend and so never moves either way, but a
-// constant height keeps the compact-layout threshold from depending on whether
-// the legend happens to be open.
+// A single hint is the shortest set there is, so it stays on one line like any
+// other short set. The frame sits above the legend and never moves either way,
+// and requiredHeight reserves the tallest legend regardless, so the collapsed
+// state costs nothing.
 func helpHint(pal theme.Palette) []string {
-	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
-	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
-
-	rows := make([]string, helpRows)
-	rows[0] = " " + key.Render("/") + faint.Render(" keys")
-	return rows
+	return []string{helpInline(pal, []string{"/ keys"})}
 }
 
 // Key sets for each screen. Order matters: hints fill downward, so entries are
@@ -328,10 +323,37 @@ var (
 	statsKeys       = []string{"t back", "esc back", "q quit"}
 )
 
-// helpBlock lays the key hints out as a grid. A single long line pushed the
-// hints wider than the HUD frame above them; columns keep the block inside the
-// frame's footprint and group related keys vertically.
+// helpInlineMax is the largest key set kept on one line. Up to this many hints
+// fit comfortably inside the frame, and stacking three items into a single
+// narrow column reads as a list rather than a legend. Past it the grid is
+// needed: that is what pushed the original legend wider than the frame.
+const helpInlineMax = 3
+
+// helpBlock lays the key hints out. Short sets stay on one line; longer ones
+// wrap into columns of helpRows so the block never runs wider than the HUD
+// frame above it.
 func helpBlock(pal theme.Palette, parts []string) []string {
+	if len(parts) <= helpInlineMax {
+		return []string{helpInline(pal, parts)}
+	}
+	return helpGrid(pal, parts)
+}
+
+// helpInline renders a short key set as one line.
+func helpInline(pal theme.Palette, parts []string) string {
+	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
+	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
+
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		word, rest, _ := strings.Cut(p, " ")
+		out = append(out, key.Render(word)+faint.Render(" "+rest))
+	}
+	return " " + strings.Join(out, faint.Render("  ·  "))
+}
+
+// helpGrid lays a longer key set out in columns, filling downward.
+func helpGrid(pal theme.Palette, parts []string) []string {
 	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
 

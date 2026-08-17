@@ -117,8 +117,19 @@ jobs:
           ```
           EOF
           )
+          # A tag carrying a semver prerelease suffix is published as a
+          # prerelease. GitHub's "latest release" is the most recent
+          # non-prerelease by date, and pomo --update installs whatever that
+          # points at — so without this, tagging v1.0.0-rc1 or a throwaway
+          # would push it onto everyone who updates.
+          flags=()
+          case "$TAG" in
+            *-*) flags+=(--prerelease) ;;
+          esac
+
           gh release create "$TAG" \
             --title "$TAG" \
             --notes "$notes" \
             --generate-notes \
+            ${flags[@]+"${flags[@]}"} \
             dist/*.tar.gz dist/*.zip dist/checksums.txt

@@ -53,6 +53,49 @@ func FormatRemaining(d time.Duration, showSeconds bool) string {
 	return fmt.Sprintf("00:%02d", secs)
 }
 
+// FormatElapsed renders a count-up duration in exactly five glyphs, which is
+// what keeps zen mode from reflowing the HUD.
+//
+// The pixel font is fixed-advance and the layout is sized once from a sample
+// clock string, so a clock that grew a digit would move the whole frame. A
+// stopwatch has no upper bound, so the units change instead of the width:
+// MM:SS under an hour, HH:MM from an hour on. Five glyphs cannot say which,
+// which is why the line beneath always spells the time out in full.
+func FormatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	total := int(d / time.Second)
+	if total < 3600 {
+		return fmt.Sprintf("%02d:%02d", total/60, total%60)
+	}
+	hours := total / 3600
+	if hours > 99 {
+		// A hundred hours in one sitting is not a session anyone is having, and
+		// a sixth glyph would move the frame.
+		hours = 99
+	}
+	return fmt.Sprintf("%02d:%02d", hours, (total%3600)/60)
+}
+
+// SpellElapsed writes a duration out in full, which is where the ambiguity in
+// the five-glyph clock is resolved.
+func SpellElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	total := int(d / time.Second)
+	h, m, sec := total/3600, (total%3600)/60, total%60
+	switch {
+	case h > 0:
+		return fmt.Sprintf("%dh %dm %ds", h, m, sec)
+	case m > 0:
+		return fmt.Sprintf("%dm %ds", m, sec)
+	default:
+		return fmt.Sprintf("%ds", sec)
+	}
+}
+
 // set updates the displayed text, starting a roll on every character that
 // changed. A change in length resets rather than animates: the layout is
 // fixed-width, so that only happens on a format switch.

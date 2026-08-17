@@ -98,6 +98,29 @@ var Indigo = Palette{
 	SpriteTintStrength: 0.22,
 }
 
+// Zen is the open-ended stopwatch's palette: the calmest of the set. Focus is
+// meant to feel brisk; zen is the opposite, so the colours are cool and low
+// contrast and nothing about it urges you along.
+var Zen = Palette{
+	Name:      "zen",
+	Panel:     hex("#0e1114"),
+	Frame:     hex("#2f3b46"),
+	FrameDim:  hex("#18202a"),
+	Accent:    hex("#7fb3c8"),
+	AccentDim: hex("#24323c"),
+	Text:      hex("#d5e6ee"),
+	TextDim:   hex("#5f7480"),
+	Clock: pixfont.Style{
+		FaceTop:    hex("#cfe8f2"),
+		FaceBottom: hex("#4a7f95"),
+		Outline:    hex("#0b1a21"),
+		Bevel:      hex("#ffffff"),
+		Ghost:      hex("#162026"),
+	},
+	SpriteTint:         hex("#7fb3c8"),
+	SpriteTintStrength: 0.15,
+}
+
 // Alert overrides the clock during the last seconds of a phase. It is applied
 // on top of whatever phase palette is active, so the HUD stays put and only
 // the countdown escalates.
@@ -164,6 +187,8 @@ func ByName(name string) (Palette, bool) {
 		return Mint, true
 	case "indigo":
 		return Indigo, true
+	case "zen":
+		return Zen, true
 	}
 	return Palette{}, false
 }

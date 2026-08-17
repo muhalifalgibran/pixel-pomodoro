@@ -33,6 +33,11 @@ type Resume struct {
 	// Habit is the stable ID of the habit that was active, so relaunching
 	// resumes the same one rather than dropping back to nothing.
 	Habit string `json:"habit,omitempty"`
+	// Zen records the open-ended stopwatch, which does not go through the
+	// timer at all and so cannot be described by the snapshot above.
+	Zen         bool      `json:"zen,omitempty"`
+	ZenElapsedS int       `json:"zen_elapsed_seconds,omitempty"`
+	ZenStart    time.Time `json:"zen_start,omitempty"`
 	// PhaseStart is when the current phase began, so a session finished after
 	// resuming is logged with its real start time.
 	PhaseStart time.Time `json:"phase_start"`

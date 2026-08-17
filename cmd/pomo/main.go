@@ -67,6 +67,7 @@ type flags struct {
 	noSeconds   bool
 	paused      bool
 	fresh       bool
+	zen         bool
 
 	// Development and verification affordances. They ship deliberately: they
 	// are what makes the timer debuggable without waiting 25 minutes.
@@ -105,6 +106,7 @@ func run() error {
 	flag.BoolVar(&f.noSeconds, "no-seconds", false, "show minutes only until the final minute")
 	flag.BoolVar(&f.paused, "paused", false, "start paused instead of counting down immediately")
 	flag.BoolVar(&f.fresh, "fresh", false, "ignore the saved position and start a new focus phase")
+	flag.BoolVar(&f.zen, "zen", false, "start the open-ended stopwatch, attached to no habit or goal")
 
 	flag.BoolVar(&f.demo, "demo", false, "render the art once and exit, for iterating on sprites")
 	flag.BoolVar(&f.mono, "mono", false, "with -demo, print opacity silhouettes instead of color")
@@ -174,6 +176,7 @@ func run() error {
 		StartRunning: !f.paused,
 		SkipToEnd:    f.skipToEnd,
 		Fresh:        f.fresh,
+		Zen:          f.zen,
 	})
 	if err != nil {
 		return err

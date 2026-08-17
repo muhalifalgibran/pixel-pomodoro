@@ -200,18 +200,18 @@ func TestFullViewSurvivesAnOverlongTask(t *testing.T) {
 }
 
 func TestHelpBlockIsAGridOfColumns(t *testing.T) {
-	rows := helpBlock(theme.Ember, false)
+	rows := helpBlock(theme.Ember, timerKeys)
 
 	if len(rows) != helpRows {
 		t.Fatalf("helpBlock returned %d rows, want %d", len(rows), helpRows)
 	}
 
-	// Hints fill downward: three per column, so eight entries make three
-	// columns of 3, 3 and 2.
+	// Hints fill downward: three per column, so nine entries make three full
+	// columns.
 	wantContents := [helpRows][]string{
-		{"space", "habits", "quit"},
-		{"skip", "stats", "hide"},
-		{"reset", "note"},
+		{"space", "habits", "note"},
+		{"skip", "stats", "quit"},
+		{"reset", "zen", "hide"},
 	}
 	for i, want := range wantContents {
 		for _, w := range want {
@@ -234,9 +234,14 @@ func TestHelpBlockIsAGridOfColumns(t *testing.T) {
 func TestHelpBlockFitsUnderTheFrame(t *testing.T) {
 	m, _ := testModel(t, nil)
 	frameWidth := m.geom.BandW + 2
+	pal := theme.Ember
 
 	for _, editing := range []bool{false, true} {
-		for i, r := range helpBlock(theme.Ember, editing) {
+		keys := timerKeys
+		if editing {
+			keys = editingKeys
+		}
+		for i, r := range helpBlock(pal, keys) {
 			if got := lipgloss.Width(r); got > frameWidth {
 				t.Errorf("editing=%v row %d is %d cells wide, wider than the %d-cell frame",
 					editing, i, got, frameWidth)
@@ -248,7 +253,7 @@ func TestHelpBlockFitsUnderTheFrame(t *testing.T) {
 // Editing mode has fewer hints than rows; the block must still be helpRows
 // tall so the layout does not jump when entering and leaving the task field.
 func TestHelpBlockHeightIsStableAcrossModes(t *testing.T) {
-	if got := len(helpBlock(theme.Ember, true)); got != helpRows {
+	if got := len(helpBlock(theme.Ember, editingKeys)); got != helpRows {
 		t.Errorf("editing help is %d rows, want %d", got, helpRows)
 	}
 }
@@ -1633,5 +1638,304 @@ func TestStatsScreenReportsZenSeparately(t *testing.T) {
 	}
 	if !strings.Contains(out, "1h 20m") {
 		t.Errorf("zen total is wrong:\n%s", out)
+	}
+}
+
+// --- zen mode ---
+
+// The five-glyph invariant is what keeps zen from reflowing the HUD.
+func TestElapsedClockIsAlwaysFiveGlyphs(t *testing.T) {
+	for _, d := range []time.Duration{
+		0, time.Second, 59 * time.Second,
+		time.Minute, 59*time.Minute + 59*time.Second,
+		time.Hour, time.Hour + time.Minute,
+		9 * time.Hour, 25 * time.Hour, 99 * time.Hour,
+		200 * time.Hour, // clamped rather than growing a glyph
+		-time.Second,
+	} {
+		got := FormatElapsed(d)
+		if len([]rune(got)) != 5 {
+			t.Errorf("FormatElapsed(%v) = %q, which is %d glyphs, not 5", d, got, len([]rune(got)))
+		}
+		if w, _ := clockCanvasSize(got); w != mustClockWidth(t) {
+			t.Errorf("FormatElapsed(%v) = %q renders %d wide, want %d", d, got, w, mustClockWidth(t))
+		}
+	}
+}
+
+func mustClockWidth(t *testing.T) int {
+	t.Helper()
+	w, _ := clockCanvasSize("00:00")
+	return w
+}
+
+// The units switch at exactly an hour, since that is where MM:SS would need a
+// sixth glyph.
+func TestElapsedClockSwitchesUnitsAtOneHour(t *testing.T) {
+	if got, want := FormatElapsed(59*time.Minute+59*time.Second), "59:59"; got != want {
+		t.Errorf("just under an hour = %q, want %q", got, want)
+	}
+	if got, want := FormatElapsed(time.Hour), "01:00"; got != want {
+		t.Errorf("exactly an hour = %q, want %q (HH:MM)", got, want)
+	}
+	if got, want := FormatElapsed(time.Hour+30*time.Minute), "01:30"; got != want {
+		t.Errorf("90 minutes = %q, want %q", got, want)
+	}
+}
+
+// Five glyphs cannot say whether 01:30 is an hour and a half or ninety seconds,
+// so the spelled-out form has to be unambiguous.
+func TestSpellElapsed(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{5 * time.Second, "5s"},
+		{90 * time.Second, "1m 30s"},
+		{time.Hour + 40*time.Minute + 12*time.Second, "1h 40m 12s"},
+		{-time.Second, "0s"},
+	}
+	for _, tt := range tests {
+		if got := SpellElapsed(tt.d); got != tt.want {
+			t.Errorf("SpellElapsed(%v) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}
+
+func zenModel(t *testing.T) (*Model, *store.Store) {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+	m, err := New(Options{Config: cfg, Store: st, StartRunning: true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return m, st
+}
+
+func TestZenTogglesAndCountsUp(t *testing.T) {
+	m, _ := zenModel(t)
+	sizeTo(m, 100, 40)
+
+	press(m, "z")
+	if !m.zen {
+		t.Fatal("z did not enter zen")
+	}
+	if m.timer.Running {
+		t.Error("the pomodoro is still running during zen")
+	}
+
+	tick(m, 90*time.Second)
+	if m.zenElapsed != 90*time.Second {
+		t.Errorf("zenElapsed = %v, want 90s", m.zenElapsed)
+	}
+	if got := m.clockText(); got != "01:30" {
+		t.Errorf("clock = %q, want 01:30 counting up", got)
+	}
+}
+
+// Leaving zen must hand the pomodoro back exactly as it was.
+func TestZenLeavesThePomodoroUntouched(t *testing.T) {
+	m, _ := zenModel(t)
+	tick(m, 5*time.Minute) // run some focus first
+	before := m.timer.Snapshot()
+
+	press(m, "z")
+	tick(m, 20*time.Minute) // long enough to have finished the phase
+	press(m, "z")
+
+	after := m.timer.Snapshot()
+	if after.Phase != before.Phase {
+		t.Errorf("phase moved from %v to %v during zen", before.Phase, after.Phase)
+	}
+	if after.Remaining != before.Remaining {
+		t.Errorf("remaining moved from %v to %v during zen", before.Remaining, after.Remaining)
+	}
+	if after.CycleIndex != before.CycleIndex {
+		t.Errorf("cycle moved from %d to %d during zen", before.CycleIndex, after.CycleIndex)
+	}
+}
+
+func TestZenLogsWithNoHabitAndEarnsXP(t *testing.T) {
+	m, st := zenModel(t)
+	press(m, "z")
+	tick(m, 30*time.Minute)
+	press(m, "z")
+
+	if m.zen {
+		t.Error("z did not leave zen")
+	}
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("logged %d sessions, want 1", len(sessions))
+	}
+	got := sessions[0]
+	if got.Phase != store.PhaseZen {
+		t.Errorf("phase = %q, want %q", got.Phase, store.PhaseZen)
+	}
+	if got.Habit != "" {
+		t.Errorf("habit = %q, want empty — zen belongs to no goal", got.Habit)
+	}
+	if got.Mins != 30 {
+		t.Errorf("mins = %d, want 30", got.Mins)
+	}
+	if m.stats.XP != 30 {
+		t.Errorf("XP = %d, want 30 — zen is real work", m.stats.XP)
+	}
+}
+
+func TestZenMovesNoHabit(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // work active
+
+	press(m, "z")
+	tick(m, 45*time.Minute)
+	press(m, "z")
+
+	if got := m.progress["work"].Value; got != 0 {
+		t.Errorf("work progress = %d, want 0 — zen must not feed a habit", got)
+	}
+}
+
+func TestZenPausesWithSpace(t *testing.T) {
+	m, _ := zenModel(t)
+	press(m, "z")
+	tick(m, time.Minute)
+
+	m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if m.zenRunning {
+		t.Fatal("space did not pause zen")
+	}
+	tick(m, 5*time.Minute)
+	if m.zenElapsed != time.Minute {
+		t.Errorf("zenElapsed = %v, want it frozen at 1m", m.zenElapsed)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	tick(m, time.Minute)
+	if m.zenElapsed != 2*time.Minute {
+		t.Errorf("zenElapsed = %v, want 2m after resuming", m.zenElapsed)
+	}
+}
+
+// Skip and reset belong to the pomodoro; there is no phase to skip in zen.
+func TestSkipAndResetAreInertInZen(t *testing.T) {
+	m, st := zenModel(t)
+	press(m, "z")
+	tick(m, time.Minute)
+
+	press(m, "s")
+	press(m, "r")
+
+	if !m.zen {
+		t.Error("s or r knocked the model out of zen")
+	}
+	sessions, _, _ := st.Load()
+	if len(sessions) != 0 {
+		t.Errorf("logged %d sessions, want none", len(sessions))
+	}
+}
+
+func TestQuittingLogsAZenStretchInProgress(t *testing.T) {
+	m, st := zenModel(t)
+	press(m, "z")
+	tick(m, 20*time.Minute)
+	press(m, "q")
+
+	sessions, _, _ := st.Load()
+	if len(sessions) != 1 {
+		t.Fatalf("logged %d sessions, want the zen stretch to be kept", len(sessions))
+	}
+	if sessions[0].Phase != store.PhaseZen {
+		t.Errorf("phase = %q, want zen", sessions[0].Phase)
+	}
+}
+
+func TestZenSurvivesAQuitAndResumes(t *testing.T) {
+	cfg := config.Default()
+	cfg.Notify = false
+	cfg.Sound = ""
+	st := store.New(filepath.Join(t.TempDir(), "sessions.jsonl"))
+
+	first, err := New(Options{Config: cfg, Store: st, StartRunning: true, Zen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tick(first, 10*time.Minute)
+	// Save without stopping, the way a crash or a bare save would.
+	first.saveResume()
+
+	second, err := New(Options{Config: cfg, Store: st, StartRunning: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.zen {
+		t.Fatal("zen did not resume")
+	}
+	if second.zenElapsed != 10*time.Minute {
+		t.Errorf("zenElapsed = %v, want 10m", second.zenElapsed)
+	}
+}
+
+func TestZenViewSpellsOutTheTimeAndDropsPomodoroChrome(t *testing.T) {
+	m, _ := zenModel(t)
+	sizeTo(m, 100, 40)
+	press(m, "z")
+	tick(m, time.Hour+40*time.Minute+12*time.Second)
+
+	out := m.View()
+
+	if !strings.Contains(out, "1h 40m 12s") {
+		t.Errorf("zen view does not spell the elapsed time out:\n%s", out)
+	}
+	if !strings.Contains(out, "ZEN") {
+		t.Errorf("zen view does not say it is in zen:\n%s", out)
+	}
+	// The cycle dots and phase label belong to the pomodoro.
+	if strings.Contains(out, "FOCUS") {
+		t.Error("zen view still shows the focus phase label")
+	}
+	// The legend swaps to zen's keys.
+	if !strings.Contains(out, "stop") {
+		t.Errorf("zen legend is missing:\n%s", out)
+	}
+}
+
+func TestZenUsesItsOwnPaletteAndNoSteam(t *testing.T) {
+	m, _ := zenModel(t)
+	press(m, "z")
+
+	if got := m.paletteTarget().Name; got != "zen" {
+		t.Errorf("palette target = %q, want zen", got)
+	}
+	if got := m.breath().steamHz; got != 0 {
+		t.Errorf("zen emits steam at %v Hz, want none", got)
+	}
+	if m.breath().period < breathFor(timer.Focus, true).period {
+		t.Error("zen breathes faster than focus; it should be the calmest")
+	}
+}
+
+// A count-up clock must never enter the alert state: there is no boundary.
+func TestZenNeverAlerts(t *testing.T) {
+	m, _ := zenModel(t)
+	sizeTo(m, 100, 40)
+	press(m, "z")
+
+	// Run right past where a pomodoro would be shaking.
+	tick(m, 3*time.Hour)
+	lines := strings.Split(m.View(), "\n")
+	want := lipgloss.Width(lines[0])
+	for i, l := range lines[:len(lines)-helpRows] {
+		if got := lipgloss.Width(l); got != want {
+			t.Errorf("line %d is %d cells wide, want %d — zen reflowed the HUD", i, got, want)
+		}
 	}
 }

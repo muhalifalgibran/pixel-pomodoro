@@ -149,6 +149,15 @@ func breathFor(p timer.Phase, running bool) breath {
 	}
 }
 
+// breathZen is the calmest motion of all: no steam, the slowest cycle. Zen is
+// open-ended, so nothing about it should suggest a deadline.
+func breathZen(running bool) breath {
+	if !running {
+		return breath{period: 5.5, bob: 0.5, squash: 0.01}
+	}
+	return breath{period: 6.0, bob: 1.4, squash: 0.022}
+}
+
 // slowestBreath bounds how brisk any phase may be. A period under this reads
 // as agitated on screen, which is the opposite of what a focus timer is for.
 const slowestBreath = 3.0

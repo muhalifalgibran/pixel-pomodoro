@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
@@ -187,6 +188,45 @@ func habitLine(pal theme.Palette, h habit.Habit, p store.HabitProgress, resumed 
 	return left + strings.Repeat(" ", gap) + right
 }
 
+// zenBar stands in for the progress bar during zen. There is no target, so
+// there is no proportion to fill; a slow travelling pulse says "running"
+// without implying an end.
+func zenBar(pal theme.Palette, elapsed time.Duration, running bool, width int) string {
+	accent := lipgloss.NewStyle().Foreground(lg(pal.Accent))
+	dim := lipgloss.NewStyle().Foreground(lg(pal.AccentDim))
+	text := lipgloss.NewStyle().Foreground(lg(pal.Text))
+
+	const barWidth = 20
+	label := "ZEN"
+	if !running {
+		label = "PAUSED"
+	}
+
+	cells := make([]string, barWidth)
+	for i := range cells {
+		cells[i] = dim.Render("▱")
+	}
+	if running {
+		// One cell sweeping left to right, a second per step.
+		at := int(elapsed/time.Second) % barWidth
+		cells[at] = accent.Render("▰")
+	}
+
+	return pad("  "+strings.Join(cells, "")+"  "+text.Render(label), width)
+}
+
+// zenLine spells the elapsed time out in full.
+//
+// The big clock is five glyphs so the HUD never reflows, which means it cannot
+// say whether "05:30" is five minutes or five hours. This line is where that is
+// resolved.
+func zenLine(pal theme.Palette, elapsed time.Duration, width int) string {
+	accent := lipgloss.NewStyle().Foreground(lg(pal.Accent))
+	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
+
+	return pad("  "+accent.Render("◈ ")+faint.Render("zen · "+SpellElapsed(elapsed)), width)
+}
+
 // taskLine shows what the current session is for.
 func taskLine(pal theme.Palette, task string, editing, resumed bool, width int) string {
 	accent := lipgloss.NewStyle().Foreground(lg(pal.Accent))
@@ -255,24 +295,28 @@ func helpHint(pal theme.Palette) []string {
 	return []string{" " + key.Render("/") + faint.Render(" keys")}
 }
 
+// Key sets for each screen. Order matters: hints fill downward, so entries are
+// grouped in threes to make full columns rather than stranding a primary key in
+// a near-empty one.
+var (
+	timerKeys = []string{
+		"space pause", "s skip", "r reset",
+		"h habits", "t stats", "z zen",
+		"e note", "q quit", "/ hide",
+	}
+	zenKeys = []string{
+		"space pause", "z stop", "t stats",
+		"q quit", "/ hide",
+	}
+	editingKeys = []string{"enter save", "esc cancel"}
+)
+
 // helpBlock lays the key hints out as a grid. A single long line pushed the
 // hints wider than the HUD frame above them; columns keep the block inside the
 // frame's footprint and group related keys vertically.
-func helpBlock(pal theme.Palette, editing bool) []string {
+func helpBlock(pal theme.Palette, parts []string) []string {
 	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
-
-	// Order matters: hints fill downward, so the first six form two full
-	// columns and the toggle trails on its own rather than stranding a
-	// primary key in a near-empty third column.
-	parts := []string{
-		"space pause", "s skip", "r reset",
-		"h habits", "t stats", "e note",
-		"q quit", "/ hide",
-	}
-	if editing {
-		parts = []string{"enter save", "esc cancel"}
-	}
 
 	rendered := make([]string, len(parts))
 	widths := make([]int, len(parts))

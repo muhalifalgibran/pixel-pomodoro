@@ -21,7 +21,7 @@ import (
 func (m *Model) hudView(pal theme.Palette) string {
 	band := canvas.New(m.geom.BandW, m.geom.BandH)
 
-	b := breathFor(m.timer.Phase, m.timer.Running)
+	b := m.breath()
 	osc := 2*anim.Pulse(m.elapsed, b.period) - 1
 	// A one-pixel bob is half a cell, which is exactly the motion half-blocks
 	// buy. Forcing the offset even quantised it to two-pixel jumps, and on
@@ -29,16 +29,27 @@ func (m *Model) hudView(pal theme.Palette) string {
 	// down twice as far as it rose.
 	bob := int(math.Round(b.bob * osc))
 
+	// Zen has no phase length, so there is nothing for the mascot to drain
+	// against and it stays full.
+	drain := m.timer.Progress()
+	if m.zen {
+		drain = 0
+	}
 	blitSquash(
 		band, m.tomato.Canvas,
 		m.geom.SpriteX, m.geom.SpriteY+bob,
 		1+b.squash*osc,
-		spriteTransform(m.tomato, pal, m.timer.Progress()),
+		spriteTransform(m.tomato, pal, drain),
 	)
 
 	m.steam.Draw(band)
 
-	style, alert := clockStyleFor(pal, m.timer.Remaining, m.timer.Running)
+	// Zen has no boundary to escalate toward, so it never enters the alert
+	// state however long it runs.
+	style, alert := pal.Clock, false
+	if !m.zen {
+		style, alert = clockStyleFor(pal, m.timer.Remaining, m.timer.Running)
+	}
 	jitter := 0
 	if alert {
 		// Two-frame shake, fast enough to read as urgency.
@@ -56,13 +67,20 @@ func (m *Model) hudView(pal theme.Palette) string {
 	content := make([]string, 0, len(rows)+3)
 	content = append(content, statusBar(pal, m.stats, m.habitStreak(), m.geom.BandW))
 	content = append(content, rows...)
-	content = append(content, progressBar(pal, m.timer, m.geom.BandW))
-	// A habit shows its own goal progress; without one the free-text task line
-	// is what the timer had before habits existed.
-	if h, ok := m.activeHabit(); ok && m.mode != modeEditTask {
-		content = append(content, habitLine(pal, h, m.progress[h.ID], m.resumed, m.geom.BandW))
-	} else {
-		content = append(content, taskLine(pal, m.displayTask(), m.mode == modeEditTask, m.resumed, m.geom.BandW))
+
+	switch {
+	case m.zen:
+		content = append(content, zenBar(pal, m.zenElapsed, m.zenRunning, m.geom.BandW))
+		content = append(content, zenLine(pal, m.zenElapsed, m.geom.BandW))
+	default:
+		content = append(content, progressBar(pal, m.timer, m.geom.BandW))
+		// A habit shows its own goal progress; without one the free-text task
+		// line is what the timer had before habits existed.
+		if h, ok := m.activeHabit(); ok && m.mode != modeEditTask {
+			content = append(content, habitLine(pal, h, m.progress[h.ID], m.resumed, m.geom.BandW))
+		} else {
+			content = append(content, taskLine(pal, m.displayTask(), m.mode == modeEditTask, m.resumed, m.geom.BandW))
+		}
 	}
 
 	out := frameLines(pal, m.geom.BandW, content)
@@ -76,12 +94,15 @@ func (m *Model) hudView(pal theme.Palette) string {
 // rows.
 func (m *Model) helpRowsFor(pal theme.Palette) []string {
 	if m.mode == modeEditTask {
-		return helpBlock(pal, true)
+		return helpBlock(pal, editingKeys)
 	}
 	if !m.showHelp {
 		return helpHint(pal)
 	}
-	return helpBlock(pal, false)
+	if m.zen {
+		return helpBlock(pal, zenKeys)
+	}
+	return helpBlock(pal, timerKeys)
 }
 
 // requiredHeight is the rows the full HUD needs: two borders, the status bar,
@@ -93,6 +114,14 @@ func (m *Model) requiredHeight() int {
 		help = helpRows
 	}
 	return 2 + 3 + m.geom.BandH/2 + help
+}
+
+// breath is the mascot's idle motion for whatever is running.
+func (m *Model) breath() breath {
+	if m.zen {
+		return breathZen(m.zenRunning)
+	}
+	return breathFor(m.timer.Phase, m.timer.Running)
 }
 
 // habitStreak is the streak the status bar shows: the active habit's own run of

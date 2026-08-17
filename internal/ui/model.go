@@ -65,6 +65,8 @@ type Options struct {
 	SkipToEnd bool
 	// Fresh ignores any saved position and starts a new focus phase.
 	Fresh bool
+	// Zen starts in the open-ended stopwatch.
+	Zen bool
 }
 
 // Model is the Bubble Tea model for the HUD.
@@ -114,6 +116,16 @@ type Model struct {
 	// survives a quit, so a session finished after resuming is logged against
 	// the time it actually started.
 	phaseStart time.Time
+	// Zen is the open-ended stopwatch. It deliberately does not go through
+	// timer.State: that machine counts down toward a configured length, and
+	// bending it into an unbounded count-up would compromise the one component
+	// here that is provably simple. While zen runs the timer is simply not
+	// advanced, so leaving zen returns to it exactly where it was.
+	zen        bool
+	zenRunning bool
+	zenElapsed time.Duration
+	zenStart   time.Time
+
 	// resumed records that this run picked up a saved position, so the HUD can
 	// say so rather than leaving the user wondering why the clock is odd.
 	resumed bool
@@ -167,6 +179,7 @@ func New(opts Options) (*Model, error) {
 	// actually began rather than this launch.
 	phaseStart := now
 	resumed := false
+	var zenResume store.Resume
 	if opts.Config.Resume && !opts.Fresh && !opts.SkipToEnd {
 		if saved, ok := opts.Store.LoadResume(now); ok {
 			if snap, ok := saved.Snapshot(); ok {
@@ -178,6 +191,9 @@ func New(opts Options) (*Model, error) {
 					resumed = true
 					if !saved.PhaseStart.IsZero() {
 						phaseStart = saved.PhaseStart
+					}
+					if saved.Zen {
+						zenResume = saved
 					}
 					if activeID == "" && saved.Habit != "" {
 						// Only honour a habit that still exists; a stale ID
@@ -244,10 +260,61 @@ func New(opts Options) (*Model, error) {
 	}
 	m.confetti.Gravity = 34
 	m.confetti.Drag = 0.6
+	switch {
+	case opts.Zen:
+		m.startZen(now)
+	case zenResume.Zen && !opts.Fresh:
+		// Zen was running when the user quit; pick it back up where it was.
+		m.startZen(now)
+		m.zenElapsed = time.Duration(zenResume.ZenElapsedS) * time.Second
+		if !zenResume.ZenStart.IsZero() {
+			m.zenStart = zenResume.ZenStart
+		}
+	}
 	m.clk.set(m.clockText())
 	m.refreshProgress(now)
 	m.applyHabitTiming()
 	return m, nil
+}
+
+// startZen enters the stopwatch, pausing the pomodoro where it stands.
+func (m *Model) startZen(now time.Time) {
+	m.zen = true
+	m.zenRunning = true
+	m.zenElapsed = 0
+	m.zenStart = now
+	m.timer.Running = false
+	m.fadeTo(m.paletteTarget())
+	m.steam.Clear()
+	m.steamCredit = 0
+}
+
+// stopZen logs the stretch and hands the HUD back to the pomodoro.
+//
+// The session carries no habit ID: zen belongs to no goal, by design. It still
+// earns XP and keeps the global streak alive, because the time was real.
+func (m *Model) stopZen() {
+	if mins := int(math.Round(m.zenElapsed.Minutes())); mins > 0 {
+		m.appendSession(store.Session{
+			Start: m.zenStart,
+			Mins:  mins,
+			Task:  "zen",
+			Phase: store.PhaseZen,
+			Done:  true,
+		})
+	}
+	m.zen = false
+	m.zenRunning = false
+	m.zenElapsed = 0
+	m.fadeTo(m.paletteTarget())
+	m.phaseStart = time.Now()
+}
+
+// fadeTo starts a cross-fade toward a palette.
+func (m *Model) fadeTo(pal theme.Palette) {
+	m.palFrom = m.palette()
+	m.palTo = pal
+	m.palT = 0
 }
 
 // unknownHabit reports a name that matched nothing, listing what would have
@@ -384,6 +451,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	switch msg.String() {
 	case "ctrl+c", "q":
+		// A zen stretch in progress is logged rather than discarded; the time
+		// was spent either way.
+		if m.zen {
+			m.stopZen()
+		}
 		m.saveResume()
 		m.quitting = true
 		return tea.Quit
@@ -400,11 +472,27 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.showHelp = !m.showHelp
 	case "esc":
 		m.mode = modeNormal
+	case "z":
+		if m.zen {
+			m.stopZen()
+		} else {
+			m.startZen(time.Now())
+		}
 	case " ":
-		m.timer.Toggle()
+		if m.zen {
+			m.zenRunning = !m.zenRunning
+		} else {
+			m.timer.Toggle()
+		}
 	case "s":
+		if m.zen {
+			break
+		}
 		m.skip()
 	case "r":
+		if m.zen {
+			break
+		}
 		m.timer.Reset()
 		m.phaseStart = time.Now()
 	case "e":
@@ -612,10 +700,16 @@ func (m *Model) advance(now time.Time) {
 	seconds := scaled.Seconds()
 	m.elapsed += seconds
 
-	for _, ev := range m.timer.Advance(scaled) {
-		// A phase that ended on its own ran its full configured length.
-		m.record(ev.Ended, m.cfg.Timer().Duration(ev.Ended), ev.Completed)
-		m.onPhaseChange(ev)
+	if m.zen {
+		if m.zenRunning {
+			m.zenElapsed += scaled
+		}
+	} else {
+		for _, ev := range m.timer.Advance(scaled) {
+			// A phase that ended on its own ran its full configured length.
+			m.record(ev.Ended, m.cfg.Timer().Duration(ev.Ended), ev.Completed)
+			m.onPhaseChange(ev)
+		}
 	}
 
 	m.clk.set(m.clockText())
@@ -629,7 +723,7 @@ func (m *Model) advance(now time.Time) {
 }
 
 func (m *Model) updateParticles(dt float64) {
-	b := breathFor(m.timer.Phase, m.timer.Running)
+	b := m.breath()
 	if b.steamHz > 0 {
 		m.steamCredit += b.steamHz * dt
 		for m.steamCredit >= 1 {
@@ -665,7 +759,24 @@ func (m *Model) saveResume() {
 	}
 	// Errors are dropped on purpose: failing to save your place must not stop
 	// the program exiting.
-	_ = m.store.SaveResume(store.NewResume(snap, m.activeID, m.phaseStart, time.Now()))
+	r := store.NewResume(snap, m.activeID, m.phaseStart, time.Now())
+	r.Zen = m.zen
+	r.ZenElapsedS = int(m.zenElapsed / time.Second)
+	r.ZenStart = m.zenStart
+	_ = m.store.SaveResume(r)
+}
+
+// appendSession records one session in memory, on disk and in the derived
+// figures. Both the pomodoro and zen paths go through it so none of the three
+// can be updated without the others.
+func (m *Model) appendSession(sess store.Session) {
+	now := time.Now()
+	m.sessions = append(m.sessions, sess)
+	m.stats = store.Compute(m.sessions, now)
+	m.refreshProgress(now)
+	// A failed write must not take the session down; the timer keeps running
+	// and the user still sees their progress for this run.
+	_ = m.store.Append(sess)
 }
 
 // record appends a finished phase to the log and refreshes the derived stats.
@@ -685,22 +796,13 @@ func (m *Model) record(phase timer.Phase, ran time.Duration, completed bool) {
 		Phase: phase.String(),
 		Done:  completed,
 	}
-	now := time.Now()
-	m.phaseStart = now
-
-	m.sessions = append(m.sessions, sess)
-	m.stats = store.Compute(m.sessions, now)
-	m.refreshProgress(now)
-	// A failed write must not take the session down; the timer keeps running
-	// and the user still sees their progress for this run.
-	_ = m.store.Append(sess)
+	m.phaseStart = time.Now()
+	m.appendSession(sess)
 }
 
 // onPhaseChange fires the notification and starts the visual transition.
 func (m *Model) onPhaseChange(ev timer.Event) {
-	m.palFrom = m.palette()
-	m.palTo = theme.For(ev.Next)
-	m.palT = 0
+	m.fadeTo(m.paletteTarget())
 
 	// The saved position now describes a phase that is over. Rewrite it
 	// immediately rather than waiting for a clean quit, so a crash cannot
@@ -731,6 +833,15 @@ func (m *Model) palette() theme.Palette {
 	return theme.Lerp(m.palFrom, m.palTo, anim.EaseOutQuad(m.palT))
 }
 
+// onPhaseChange fades toward the new phase, but zen owns the palette while it
+// runs, so a phase boundary crossed beforehand must not steal it back.
+func (m *Model) paletteTarget() theme.Palette {
+	if m.zen {
+		return theme.Zen
+	}
+	return theme.For(m.timer.Phase)
+}
+
 // statsWidth is the width the stats screen may use. Before the first
 // WindowSizeMsg the terminal size is unknown, so fall back to the frame width
 // the HUD already assumes.
@@ -742,6 +853,9 @@ func (m *Model) statsWidth() int {
 }
 
 func (m *Model) clockText() string {
+	if m.zen {
+		return FormatElapsed(m.zenElapsed)
+	}
 	return FormatRemaining(m.timer.Remaining, m.cfg.ShowSeconds)
 }
 

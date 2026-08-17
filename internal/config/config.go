@@ -154,7 +154,7 @@ func (c Config) Validate() error {
 		return err
 	}
 	if _, ok := theme.ByName(c.Theme); !ok {
-		return fmt.Errorf("unknown theme %q, want one of: ember, mint, indigo", c.Theme)
+		return fmt.Errorf("unknown theme %q, want one of: ember, mint, indigo, zen", c.Theme)
 	}
 	return nil
 }

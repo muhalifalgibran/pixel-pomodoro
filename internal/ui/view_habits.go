@@ -31,6 +31,12 @@ func HabitsReport(pal theme.Palette, habits []habit.Habit, progress map[string]s
 	return habitsView(pal, habits, progress, -1, "")
 }
 
+// HabitRowReport renders one habit's row, for `pomo -log` to echo back where
+// the entry landed.
+func HabitRowReport(pal theme.Palette, h habit.Habit, p store.HabitProgress) string {
+	return habitRow(pal, h, p, false, true) + "\n"
+}
+
 // habitsView is the [h] screen: every habit with its current progress, and a
 // cursor for picking one. A negative cursor draws no selection.
 func habitsView(pal theme.Palette, habits []habit.Habit, progress map[string]store.HabitProgress, cursor int, activeID string) string {

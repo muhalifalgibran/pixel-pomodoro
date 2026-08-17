@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -78,6 +79,8 @@ type flags struct {
 	svgPixel   int
 	statsOnly  bool
 	habitsOnly bool
+	logSession bool
+	logDate    string
 	tickScale  float64
 	skipToEnd  bool
 }
@@ -115,6 +118,8 @@ func run() error {
 	flag.IntVar(&f.svgPixel, "svg-pixel", 6, "with -demo -svg, the size in SVG units of one art pixel")
 	flag.BoolVar(&f.statsOnly, "stats", false, "print stats and exit")
 	flag.BoolVar(&f.habitsOnly, "habits", false, "print the habit list and progress, then exit")
+	flag.BoolVar(&f.logSession, "log", false, "log work against a habit without the timer: -log <habit> [duration]")
+	flag.StringVar(&f.logDate, "log-date", "", "with -log, backdate the entry (YYYY-MM-DD)")
 	flag.Float64Var(&f.tickScale, "tick-scale", 1, "multiply elapsed time; 60 fast-forwards a cycle into seconds")
 	flag.BoolVar(&f.skipToEnd, "skip-to-end", false, "start one second from the end of a 1m phase, to verify completion")
 
@@ -162,6 +167,9 @@ func run() error {
 	}
 	if f.habitsOnly {
 		return printHabits(cfg, st, habits)
+	}
+	if f.logSession {
+		return logSession(os.Stdout, cfg, st, habits, flag.Args(), f.logDate, time.Now())
 	}
 
 	// Launching a timer means you want it running; -paused is for when you
@@ -240,6 +248,93 @@ func printStats(cfg config.Config, st *store.Store, hs *habit.Store) error {
 	if skipped > 0 {
 		fmt.Fprintf(os.Stderr, "\npomo: skipped %d unreadable line(s) in %s\n", skipped, st.Path())
 	}
+	return nil
+}
+
+// logSession appends completed work to the log without running the timer, for
+// time spent away from the terminal. Without it the contribution bars would
+// misrepresent the day.
+//
+// The duration is optional: omitting it logs one session at the habit's own
+// focus length, which is what a session-count goal needs.
+func logSession(out io.Writer, cfg config.Config, st *store.Store, hs *habit.Store, args []string, date string, now time.Time) error {
+	if len(args) == 0 {
+		return fmt.Errorf(
+			"usage: pomo -log <habit> [duration]\n" +
+				"  pomo -log work 90m                     90 minutes\n" +
+				"  pomo -log reading                      one session at that habit's focus length\n" +
+				"  pomo -log -log-date 2026-08-16 work 4h backdated; flags come before the habit")
+	}
+
+	list, err := hs.Load()
+	if err != nil {
+		return err
+	}
+	name := args[0]
+	h, ok := list.ByName(name)
+	if !ok {
+		known := list.Names()
+		if len(known) == 0 {
+			return fmt.Errorf("no habit named %q, and none are defined yet — add one with pomo, then h, then a", name)
+		}
+		return fmt.Errorf("no habit named %q; try one of: %s", name, strings.Join(known, ", "))
+	}
+
+	// A habit's own focus length is the natural size of "one session".
+	dur := cfg.Focus
+	if h.Focus > 0 {
+		dur = h.Focus
+	}
+	if len(args) > 1 {
+		dur, err = time.ParseDuration(args[1])
+		if err != nil {
+			return fmt.Errorf("%q is not a duration; try 90m or 1h30m", args[1])
+		}
+		if dur <= 0 {
+			return fmt.Errorf("duration must be more than zero")
+		}
+	}
+	if len(args) > 2 {
+		return fmt.Errorf("unexpected argument %q; -log takes a habit and an optional duration", args[2])
+	}
+
+	when := now
+	if date != "" {
+		// Parsed in the local zone, and anchored at noon so the entry cannot
+		// slide into the neighbouring day across a DST change.
+		day, err := time.ParseInLocation("2006-01-02", date, when.Location())
+		if err != nil {
+			return fmt.Errorf("%q is not a date; try 2026-08-17", date)
+		}
+		when = day.Add(12 * time.Hour)
+	}
+
+	mins := int(dur.Round(time.Minute) / time.Minute)
+	if mins <= 0 {
+		return fmt.Errorf("that rounds to no minutes at all")
+	}
+	sess := store.Session{
+		Start: when,
+		Mins:  mins,
+		Habit: h.ID,
+		Task:  h.Name,
+		Phase: store.PhaseFocus,
+		Done:  true,
+	}
+	if err := st.Append(sess); err != nil {
+		return err
+	}
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		return err
+	}
+	pal, _ := theme.ByName(cfg.Theme)
+	active := list.Active()
+	progress := store.Progress(sessions, active, now)
+
+	fmt.Fprintf(out, "logged %s to %s\n\n", habit.FormatMinutes(mins), h.Name)
+	fmt.Fprint(out, ui.HabitRowReport(pal, h, progress[h.ID]))
 	return nil
 }
 

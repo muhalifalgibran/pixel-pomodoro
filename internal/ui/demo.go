@@ -7,29 +7,30 @@ import (
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/config"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/pixfont"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/theme"
-	"github.com/muhalifalgibran/pixel-pomodoro/internal/timer"
 )
 
-// demoPhases is what the demo renders: one band per palette, each at a
-// different point in its phase so the mascot's drain is visible.
-var demoPhases = []struct {
-	phase    timer.Phase
+// demoBands is what the demo renders: one band per palette, each at a different
+// point in its phase so the mascot's drain is visible. Zen has no phase length
+// to drain against, so it shows the mascot full, which is what it looks like in
+// use.
+var demoBands = []struct {
+	palette  theme.Palette
 	progress float64
 }{
-	{timer.Focus, 0.25},
-	{timer.ShortBreak, 0.60},
-	{timer.LongBreak, 0.85},
+	{theme.Ember, 0.25},
+	{theme.Mint, 0.60},
+	{theme.Indigo, 0.85},
+	{theme.Zen, 0},
 }
 
 // demoBand composes a single HUD band: mascot on the left, clock on the right.
 // mono drops the clock's outline layer, which would otherwise make every glyph
 // a solid blob in a silhouette.
-func demoBand(cfg config.Config, text string, phase timer.Phase, progress float64, mono bool) (*canvas.Canvas, theme.Palette, error) {
+func demoBand(cfg config.Config, text string, pal theme.Palette, progress float64, mono bool) (*canvas.Canvas, error) {
 	tomato, err := loadTomato()
 	if err != nil {
-		return nil, theme.Palette{}, err
+		return nil, err
 	}
-	pal := theme.For(phase)
 
 	clockW, clockH := clockCanvasSize(text)
 	g := layout(tomato.Canvas.W, tomato.Canvas.H, clockW, clockH)
@@ -48,7 +49,7 @@ func demoBand(cfg config.Config, text string, phase timer.Phase, progress float6
 	if cfg.Scanlines && !mono {
 		applyScanlines(band)
 	}
-	return band, pal, nil
+	return band, nil
 }
 
 // DemoArt renders the mascot and the clock once, without starting a timer.
@@ -56,11 +57,12 @@ func demoBand(cfg config.Config, text string, phase timer.Phase, progress float6
 // or a bitmap, rerun, look.
 func DemoArt(cfg config.Config, text string, mono bool) (string, error) {
 	var out []string
-	for _, d := range demoPhases {
-		band, pal, err := demoBand(cfg, text, d.phase, d.progress, mono)
+	for _, d := range demoBands {
+		band, err := demoBand(cfg, text, d.palette, d.progress, mono)
 		if err != nil {
 			return "", err
 		}
+		pal := d.palette
 		out = append(out, "── "+pal.Name+" ──")
 		if mono {
 			out = append(out, band.Silhouette())
@@ -81,15 +83,15 @@ func DemoSVG(cfg config.Config, text string, pixel int) (string, error) {
 		pixel = 1
 	}
 
-	bands := make([]*canvas.Canvas, 0, len(demoPhases))
-	pals := make([]theme.Palette, 0, len(demoPhases))
-	for _, d := range demoPhases {
-		band, pal, err := demoBand(cfg, text, d.phase, d.progress, false)
+	bands := make([]*canvas.Canvas, 0, len(demoBands))
+	pals := make([]theme.Palette, 0, len(demoBands))
+	for _, d := range demoBands {
+		band, err := demoBand(cfg, text, d.palette, d.progress, false)
 		if err != nil {
 			return "", err
 		}
 		bands = append(bands, band)
-		pals = append(pals, pal)
+		pals = append(pals, d.palette)
 	}
 
 	const gap = 2 // pixels of breathing room between bands

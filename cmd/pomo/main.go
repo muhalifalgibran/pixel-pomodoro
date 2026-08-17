@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,11 +17,30 @@ import (
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/ui"
 )
 
+// version is stamped in at release time with -ldflags. A source build leaves
+// it as "dev", which is the honest answer for a binary built from a working
+// tree that may not match any tag.
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "pomo:", err)
 		os.Exit(1)
 	}
+}
+
+// resolveVersion prefers the linker-stamped tag, then falls back to whatever
+// the module system recorded. `go install ...@latest` produces a binary with
+// no ldflags but a populated build info, so without this it would report
+// "dev" despite being a tagged release.
+func resolveVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
 }
 
 type flags struct {
@@ -82,7 +102,14 @@ func run() error {
 	flag.BoolVar(&f.statsOnly, "stats", false, "print stats and exit")
 	flag.Float64Var(&f.tickScale, "tick-scale", 1, "multiply elapsed time; 60 fast-forwards a cycle into seconds")
 	flag.BoolVar(&f.skipToEnd, "skip-to-end", false, "start one second from the end of a 1m phase, to verify completion")
+
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("pomo %s\n", resolveVersion())
+		return nil
+	}
 
 	cfg, err := config.Load(f.configPath)
 	if err != nil {

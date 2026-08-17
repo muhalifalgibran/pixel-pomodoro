@@ -1,5 +1,9 @@
 # pixel-pomodoro
 
+[![ci](https://github.com/muhalifalgibran/pixel-pomodoro/actions/workflows/ci.yml/badge.svg)](https://github.com/muhalifalgibran/pixel-pomodoro/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/muhalifalgibran/pixel-pomodoro)](https://github.com/muhalifalgibran/pixel-pomodoro/releases/latest)
+[![license](https://img.shields.io/github/license/muhalifalgibran/pixel-pomodoro)](LICENSE)
+
 A pomodoro timer for the terminal, rendered as actual pixel art. Animated
 mascot, truecolor HUD, and progress that persists across sessions.
 
@@ -58,11 +62,40 @@ quietly.
 
 ## Install
 
+**No Go required.** `pomo` is a single static binary with the art embedded in
+it, so a download is all you need.
+
+Grab the archive for your machine from the
+[latest release](https://github.com/muhalifalgibran/pixel-pomodoro/releases/latest):
+
+```sh
+tar -xzf pomo_*.tar.gz
+sudo mv pomo_*/pomo /usr/local/bin/pomo
+pomo
+```
+
+On macOS, Gatekeeper blocks unsigned downloads the first time. Clear it with:
+
+```sh
+xattr -d com.apple.quarantine /usr/local/bin/pomo
+```
+
+Verify a download against the published checksums:
+
+```sh
+sha256sum -c checksums.txt --ignore-missing
+```
+
+<details>
+<summary>If you do have Go</summary>
+
 ```sh
 go install github.com/muhalifalgibran/pixel-pomodoro/cmd/pomo@latest
 ```
 
-Or build from a clone:
+This lands in `$(go env GOPATH)/bin`, so make sure that is on your `PATH`.
+
+Or from a clone:
 
 ```sh
 git clone https://github.com/muhalifalgibran/pixel-pomodoro
@@ -70,7 +103,7 @@ cd pixel-pomodoro
 go build -o pomo ./cmd/pomo
 ```
 
-One static binary, no runtime dependencies. The art is embedded.
+</details>
 
 ## Usage
 

@@ -180,23 +180,73 @@ func frameLines(pal theme.Palette, width int, rows []string) []string {
 	return out
 }
 
-// helpLine is the key hints below the frame.
-func helpLine(pal theme.Palette, editing bool) string {
-	key := lipgloss.NewStyle().Foreground(lg(pal.Accent))
+// helpRows is the height of the key-hint block below the frame. Hints fill
+// downward: the first helpRows entries form the first column, the next the
+// second, and so on.
+const helpRows = 3
+
+// helpColumnGap separates the columns. Wide enough that the eye reads columns
+// rather than one run-on line.
+const helpColumnGap = 4
+
+// helpBlock lays the key hints out as a grid. A single long line pushed the
+// hints wider than the HUD frame above them; columns keep the block inside the
+// frame's footprint and group related keys vertically.
+func helpBlock(pal theme.Palette, editing bool) []string {
+	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
 
-	var parts []string
+	parts := []string{"space pause", "s skip", "r reset", "e task", "t stats", "q quit"}
 	if editing {
 		parts = []string{"enter save", "esc cancel"}
-	} else {
-		parts = []string{"space pause", "s skip", "r reset", "e task", "t stats", "q quit"}
 	}
-	rendered := make([]string, 0, len(parts))
-	for _, p := range parts {
+
+	rendered := make([]string, len(parts))
+	widths := make([]int, len(parts))
+	for i, p := range parts {
 		word, rest, _ := strings.Cut(p, " ")
-		rendered = append(rendered, key.Render(word)+faint.Render(" "+rest))
+		rendered[i] = key.Render(word) + faint.Render(" "+rest)
+		widths[i] = lipgloss.Width(rendered[i])
 	}
-	return " " + strings.Join(rendered, faint.Render("  ·  "))
+
+	cols := (len(parts) + helpRows - 1) / helpRows
+	colWidth := make([]int, cols)
+	for i, w := range widths {
+		if c := i / helpRows; w > colWidth[c] {
+			colWidth[c] = w
+		}
+	}
+
+	// Every cell is padded to its column width, including the last, so the
+	// block is a clean rectangle. Trailing spaces also overwrite whatever the
+	// previous frame left on those cells.
+	total := 1
+	for c, w := range colWidth {
+		total += w
+		if c < cols-1 {
+			total += helpColumnGap
+		}
+	}
+
+	out := make([]string, helpRows)
+	for r := 0; r < helpRows; r++ {
+		var b strings.Builder
+		b.WriteString(" ")
+		for c := 0; c < cols; c++ {
+			i := c*helpRows + r
+			if i >= len(parts) {
+				break
+			}
+			b.WriteString(rendered[i])
+			gap := colWidth[c] - widths[i]
+			if c < cols-1 {
+				gap += helpColumnGap
+			}
+			b.WriteString(strings.Repeat(" ", gap))
+		}
+		out[r] = pad(b.String(), total)
+	}
+	return out
 }
 
 func clampInt(v, lo, hi int) int {

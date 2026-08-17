@@ -170,10 +170,10 @@ func TestFullViewLinesAreAllTheSameWidth(t *testing.T) {
 		t.Fatalf("View() produced %d lines, want the full HUD", len(lines))
 	}
 
-	// The last line is the help text outside the frame; every framed line
-	// must match, or the border will not line up.
+	// The help grid sits outside the frame; every framed line must match, or
+	// the border will not line up.
 	want := lipgloss.Width(lines[0])
-	for i, l := range lines[:len(lines)-1] {
+	for i, l := range lines[:len(lines)-helpRows] {
 		if got := lipgloss.Width(l); got != want {
 			t.Errorf("line %d is %d cells wide, want %d:\n%q", i, got, want, l)
 		}
@@ -191,10 +191,64 @@ func TestFullViewSurvivesAnOverlongTask(t *testing.T) {
 
 	lines := strings.Split(m.View(), "\n")
 	want := lipgloss.Width(lines[0])
-	for i, l := range lines[:len(lines)-1] {
+	for i, l := range lines[:len(lines)-helpRows] {
 		if got := lipgloss.Width(l); got != want {
 			t.Errorf("line %d is %d cells wide, want %d", i, got, want)
 		}
+	}
+}
+
+func TestHelpBlockIsAGridOfColumns(t *testing.T) {
+	rows := helpBlock(theme.Ember, false)
+
+	if len(rows) != helpRows {
+		t.Fatalf("helpBlock returned %d rows, want %d", len(rows), helpRows)
+	}
+
+	// Hints fill downward, so the first three land in column one and the next
+	// three in column two. Each row therefore pairs an entry from each.
+	wantPairs := [helpRows][2]string{
+		{"space", "task"},
+		{"skip", "stats"},
+		{"reset", "quit"},
+	}
+	for i, want := range wantPairs {
+		for _, w := range want {
+			if !strings.Contains(rows[i], w) {
+				t.Errorf("row %d = %q, want it to contain %q", i, rows[i], w)
+			}
+		}
+	}
+
+	// Columns must line up, which means every row is the same width.
+	want := lipgloss.Width(rows[0])
+	for i, r := range rows {
+		if got := lipgloss.Width(r); got != want {
+			t.Errorf("row %d is %d cells wide, want %d — columns are ragged", i, got, want)
+		}
+	}
+}
+
+// The block must never be wider than the HUD it sits under.
+func TestHelpBlockFitsUnderTheFrame(t *testing.T) {
+	m, _ := testModel(t, nil)
+	frameWidth := m.geom.BandW + 2
+
+	for _, editing := range []bool{false, true} {
+		for i, r := range helpBlock(theme.Ember, editing) {
+			if got := lipgloss.Width(r); got > frameWidth {
+				t.Errorf("editing=%v row %d is %d cells wide, wider than the %d-cell frame",
+					editing, i, got, frameWidth)
+			}
+		}
+	}
+}
+
+// Editing mode has fewer hints than rows; the block must still be helpRows
+// tall so the layout does not jump when entering and leaving the task field.
+func TestHelpBlockHeightIsStableAcrossModes(t *testing.T) {
+	if got := len(helpBlock(theme.Ember, true)); got != helpRows {
+		t.Errorf("editing help is %d rows, want %d", got, helpRows)
 	}
 }
 

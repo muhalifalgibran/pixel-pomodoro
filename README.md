@@ -33,7 +33,9 @@ resolution, which is the difference between pixel art and ASCII art.
 ▌  ▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱  FOCUS  ● ● ● ○  3/4               ▐
 ▌  ▶ pomo render loop                                      ▐
 ▙▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▟
- space pause · s skip · r reset · e task · t stats · q quit
+ space pause    e task
+ s skip         t stats
+ r reset        q quit
 ```
 
 That block above is only the silhouette — colour is what the art is actually

@@ -32,8 +32,10 @@ const (
 	confettiHold     = 1500 * time.Millisecond
 
 	// The full HUD needs this much room; below it we drop to a text layout
-	// rather than rendering broken art.
-	minHeight = 20
+	// rather than rendering broken art. Two borders, the status bar, the
+	// 12-row art band, the progress and task lines, and the help grid come to
+	// 20 rows, so this leaves a little slack.
+	minHeight = 22
 )
 
 type mode int
@@ -420,7 +422,7 @@ func (m *Model) fullView(pal theme.Palette) string {
 	content = append(content, taskLine(pal, m.displayTask(), m.mode == modeEditTask, m.geom.BandW))
 
 	out := frameLines(pal, m.geom.BandW, content)
-	out = append(out, helpLine(pal, m.mode == modeEditTask))
+	out = append(out, helpBlock(pal, m.mode == modeEditTask)...)
 	return strings.Join(out, "\n")
 }
 

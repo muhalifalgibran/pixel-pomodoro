@@ -1,0 +1,40 @@
+# tomato — pomo mascot, faceless. Mood comes from palette + motion.
+# Light source is upper-left: specular at (4..5, 10..11), rim shadow bottom-right.
+size: 24 24
+palette:
+  . = transparent
+  s = #3d6b28    stem
+  g = #5a9e3a    leaf mid
+  G = #7cc44a    leaf light
+  S = #ffd9c9    specular
+  h = #ff8a65    highlight
+  H = #ff7043    bright
+  R = #ef5350    mid bright
+  r = #d32f2f    mid
+  d = #a01818    dark
+  D = #6d1010    rim
+pixels:
+  ...........ss...........
+  ...........ss...........
+  ...........ss...........
+  ......G....ss....G......
+  ....GGGG..gssg..GGGG....
+  ..GGGGGGGGGGGGGGGGGGGG..
+  ....gggggggggggggggg....
+  .....hhggggggggggrr.....
+  ...hhhRRRggggggRRrrrd...
+  ..hhHHhRRRRRRRrrrrrddD..
+  .hhSSHhhRRRRRRRRrrrrrdd.
+  hhhHSShhRRRRRRRRrrrrrddD
+  hhhHhhRRRRRRRRRRrrrrrddD
+  hhhhhRRRRRRRRRRRrrrrrddD
+  hhhRRRRRRRRRRRRRrrrrrddD
+  hhRRRRRRRRRRRRRRrrrrrddD
+  hRRRRRRRRRRRRRRRrrrrrddD
+  .RRRRRRRRRRRRRRrrrrrddd.
+  .RRRRRRRRRRRRrrrrrrdddd.
+  ..RRRRRRRRRRrrrrrdddDD..
+  ...RRRRRRRRrrrrrdddDD...
+  ....RRRRRRrrrrrdddDD....
+  ......RRRRrrrrdddD......
+  .........rrddDD.........

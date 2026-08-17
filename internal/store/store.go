@@ -1,0 +1,258 @@
+// Package store persists finished sessions and derives every progress number
+// from them. There is deliberately no second state file: XP, level and streak
+// are recomputed by replaying the log, so they can never drift out of sync
+// with the sessions that earned them.
+package store
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
+)
+
+// Session is one line of the log.
+type Session struct {
+	Start time.Time `json:"start"`
+	Mins  int       `json:"mins"`
+	Task  string    `json:"task,omitempty"`
+	Phase string    `json:"phase"`
+	Done  bool      `json:"done"`
+}
+
+// Store is an append-only session log.
+type Store struct{ path string }
+
+// New builds a store over the given file. The file is created on first write.
+func New(path string) *Store { return &Store{path: path} }
+
+// Path is the log's location, for display in the stats screen.
+func (s *Store) Path() string { return s.path }
+
+// DefaultPath is $XDG_DATA_HOME/pomo/sessions.jsonl, falling back to
+// ~/.local/share/pomo/sessions.jsonl.
+func DefaultPath() (string, error) {
+	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+		return filepath.Join(dir, "pomo", "sessions.jsonl"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate home directory: %w", err)
+	}
+	return filepath.Join(home, ".local", "share", "pomo", "sessions.jsonl"), nil
+}
+
+// Append writes one session. Each call is a single O_APPEND write of one line,
+// so a crash mid-session cannot corrupt history already on disk.
+func (s *Store) Append(sess Session) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+	line, err := json.Marshal(sess)
+	if err != nil {
+		return fmt.Errorf("encode session: %w", err)
+	}
+	line = append(line, '\n')
+
+	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open session log: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(line); err != nil {
+		return fmt.Errorf("write session: %w", err)
+	}
+	return nil
+}
+
+// Load reads the whole log. Unparseable lines are skipped and counted rather
+// than failing the load: a half-written trailing line from a hard kill must
+// not cost the user their history.
+func (s *Store) Load() (sessions []Session, skipped int, err error) {
+	f, err := os.Open(s.path)
+	if os.IsNotExist(err) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("open session log: %w", err)
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var sess Session
+		if err := json.Unmarshal(line, &sess); err != nil {
+			skipped++
+			continue
+		}
+		sessions = append(sessions, sess)
+	}
+	if err := sc.Err(); err != nil {
+		return sessions, skipped, fmt.Errorf("read session log: %w", err)
+	}
+	return sessions, skipped, nil
+}
+
+// Stats is everything the HUD and the stats screen display.
+type Stats struct {
+	XP     int // total completed focus minutes
+	Level  int
+	Streak int // consecutive days with at least one completed focus session
+
+	// XPIntoLevel and XPForLevel drive the XP bar: progress through the
+	// current level rather than absolute XP.
+	XPIntoLevel int
+	XPForLevel  int
+
+	TodaySessions int
+	TodayMins     int
+	WeekMins      int
+
+	// ByDay holds the last DaysCharted days of completed focus minutes,
+	// oldest first, for the stats screen's bar chart.
+	ByDay []DayTotal
+}
+
+// DayTotal is one bar of the stats chart.
+type DayTotal struct {
+	Date time.Time
+	Mins int
+}
+
+// DaysCharted is how far back the stats screen's chart reaches.
+const DaysCharted = 14
+
+// xpPerLevelUnit shapes the level curve: level n begins at 25*(n-1)^2 XP, so
+// levels start quick and stretch out.
+const xpPerLevelUnit = 25
+
+// LevelForXP returns the level a total XP earns, starting at 1.
+func LevelForXP(xp int) int {
+	if xp < 0 {
+		return 1
+	}
+	return int(math.Floor(math.Sqrt(float64(xp)/xpPerLevelUnit))) + 1
+}
+
+// XPForLevelStart is the XP at which a level begins.
+func XPForLevelStart(level int) int {
+	if level <= 1 {
+		return 0
+	}
+	n := level - 1
+	return xpPerLevelUnit * n * n
+}
+
+// Compute derives every statistic from the log. now is passed in rather than
+// read so the day-boundary behavior is testable.
+func Compute(sessions []Session, now time.Time) Stats {
+	var st Stats
+
+	loc := now.Location()
+	today := civil(now)
+	weekStart := today.AddDate(0, 0, -6)
+
+	// Completed focus minutes per local day. Everything else is derived from
+	// this one map.
+	perDay := map[string]int{}
+	perDaySessions := map[string]int{}
+
+	for _, s := range sessions {
+		if !s.Done || s.Phase != "focus" || s.Mins <= 0 {
+			continue
+		}
+		st.XP += s.Mins
+
+		day := civil(s.Start.In(loc))
+		key := dayKey(day)
+		perDay[key] += s.Mins
+		perDaySessions[key]++
+
+		if day.Equal(today) {
+			st.TodayMins += s.Mins
+			st.TodaySessions++
+		}
+		if !day.Before(weekStart) && !day.After(today) {
+			st.WeekMins += s.Mins
+		}
+	}
+
+	st.Level = LevelForXP(st.XP)
+	start := XPForLevelStart(st.Level)
+	st.XPIntoLevel = st.XP - start
+	st.XPForLevel = XPForLevelStart(st.Level+1) - start
+	st.Streak = streak(perDay, today)
+
+	st.ByDay = make([]DayTotal, 0, DaysCharted)
+	for i := DaysCharted - 1; i >= 0; i-- {
+		d := today.AddDate(0, 0, -i)
+		st.ByDay = append(st.ByDay, DayTotal{Date: d, Mins: perDay[dayKey(d)]})
+	}
+	return st
+}
+
+// streak walks back from today, or from yesterday when today has not started
+// yet — a streak should not appear broken just because it is 9am.
+func streak(perDay map[string]int, today time.Time) int {
+	day := today
+	if perDay[dayKey(day)] == 0 {
+		day = day.AddDate(0, 0, -1)
+		if perDay[dayKey(day)] == 0 {
+			return 0
+		}
+	}
+	n := 0
+	for perDay[dayKey(day)] > 0 {
+		n++
+		day = day.AddDate(0, 0, -1)
+	}
+	return n
+}
+
+// civil truncates to a local calendar day, anchored at noon. Noon rather than
+// midnight because AddDate on a midnight timestamp can land on the wrong day
+// across a DST transition.
+func civil(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 12, 0, 0, 0, t.Location())
+}
+
+func dayKey(t time.Time) string { return t.Format("2006-01-02") }
+
+// RecentTasks returns the most recently used task labels, newest first, for
+// offering the user something to reuse when starting a session.
+func RecentTasks(sessions []Session, limit int) []string {
+	type seen struct {
+		task string
+		when time.Time
+	}
+	latest := map[string]time.Time{}
+	for _, s := range sessions {
+		if s.Task == "" {
+			continue
+		}
+		if prev, ok := latest[s.Task]; !ok || s.Start.After(prev) {
+			latest[s.Task] = s.Start
+		}
+	}
+	all := make([]seen, 0, len(latest))
+	for task, when := range latest {
+		all = append(all, seen{task, when})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].when.After(all[j].when) })
+
+	out := make([]string, 0, limit)
+	for i := 0; i < len(all) && i < limit; i++ {
+		out = append(out, all[i].task)
+	}
+	return out
+}

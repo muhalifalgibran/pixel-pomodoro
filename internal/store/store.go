@@ -6,7 +6,9 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -63,11 +65,10 @@ func (s *Store) Append(sess Session) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	line, err := json.Marshal(sess)
+	line, err := encodeSession(sess)
 	if err != nil {
-		return fmt.Errorf("encode session: %w", err)
+		return err
 	}
-	line = append(line, '\n')
 
 	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -78,6 +79,80 @@ func (s *Store) Append(sess Session) error {
 		return fmt.Errorf("write session: %w", err)
 	}
 	return nil
+}
+
+// ErrLogMoved reports that the end of the log is no longer the line the caller
+// meant to take back.
+var ErrLogMoved = errors.New("the log has moved on")
+
+// Size is the log's current length in bytes. A caller that wants to be able to
+// undo its next append records this first.
+func (s *Store) Size() (int64, error) {
+	fi, err := os.Stat(s.path)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("measure session log: %w", err)
+	}
+	return fi.Size(), nil
+}
+
+// RemoveLast truncates the log back to at, but only while everything after at
+// is still exactly the line sess wrote. Anything else — a second pomo appending
+// through `pomo -log`, a hand edit — leaves the file alone and returns
+// ErrLogMoved.
+//
+// Truncating rather than rebuilding the file is what keeps the append-only
+// promise intact: every byte before at is never read, never re-encoded and
+// never at risk. Rebuilding from Load would be the trap, since Load drops
+// unparseable lines on purpose (see below) and writing back what it returned
+// would quietly delete a user's damaged-but-present history.
+func (s *Store) RemoveLast(at int64, sess Session) error {
+	line, err := encodeSession(sess)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(s.path, os.O_RDWR, 0o644)
+	if os.IsNotExist(err) {
+		return ErrLogMoved
+	}
+	if err != nil {
+		return fmt.Errorf("open session log: %w", err)
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("measure session log: %w", err)
+	}
+	if fi.Size() != at+int64(len(line)) {
+		return ErrLogMoved
+	}
+
+	tail := make([]byte, len(line))
+	if _, err := f.ReadAt(tail, at); err != nil {
+		return fmt.Errorf("read session log: %w", err)
+	}
+	if !bytes.Equal(tail, line) {
+		return ErrLogMoved
+	}
+
+	if err := f.Truncate(at); err != nil {
+		return fmt.Errorf("truncate session log: %w", err)
+	}
+	return nil
+}
+
+// encodeSession renders one log line. Append and RemoveLast share it so the
+// bytes RemoveLast matches against are the bytes Append wrote.
+func encodeSession(sess Session) ([]byte, error) {
+	line, err := json.Marshal(sess)
+	if err != nil {
+		return nil, fmt.Errorf("encode session: %w", err)
+	}
+	return append(line, '\n'), nil
 }
 
 // Load reads the whole log. Unparseable lines are skipped and counted rather

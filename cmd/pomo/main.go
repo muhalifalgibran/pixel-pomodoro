@@ -79,6 +79,7 @@ type flags struct {
 	svgPixel   int
 	statsOnly  bool
 	habitsOnly bool
+	todayOnly  bool
 	logSession bool
 	logDate    string
 	tickScale  float64
@@ -118,6 +119,7 @@ func run() error {
 	flag.IntVar(&f.svgPixel, "svg-pixel", 6, "with -demo -svg, the size in SVG units of one art pixel")
 	flag.BoolVar(&f.statsOnly, "stats", false, "print stats and exit")
 	flag.BoolVar(&f.habitsOnly, "habits", false, "print the habit list and progress, then exit")
+	flag.BoolVar(&f.todayOnly, "today", false, "print the check-off list and progress, then exit")
 	flag.BoolVar(&f.logSession, "log", false, "log work against a habit without the timer: -log <habit> [duration]")
 	flag.StringVar(&f.logDate, "log-date", "", "with -log, backdate the entry (YYYY-MM-DD)")
 	flag.Float64Var(&f.tickScale, "tick-scale", 1, "multiply elapsed time; 60 fast-forwards a cycle into seconds")
@@ -167,6 +169,9 @@ func run() error {
 	}
 	if f.habitsOnly {
 		return printHabits(cfg, st, habits)
+	}
+	if f.todayOnly {
+		return printToday(os.Stdout, cfg, st, habits, time.Now())
 	}
 	if f.logSession {
 		return logSession(os.Stdout, cfg, st, habits, flag.Args(), f.logDate, time.Now())
@@ -281,17 +286,11 @@ func logSession(out io.Writer, cfg config.Config, st *store.Store, hs *habit.Sto
 	}
 
 	// A habit's own focus length is the natural size of "one session".
-	dur := cfg.Focus
-	if h.Focus > 0 {
-		dur = h.Focus
-	}
+	dur := store.SessionLength(h, cfg.Focus)
 	if len(args) > 1 {
 		dur, err = time.ParseDuration(args[1])
 		if err != nil {
 			return fmt.Errorf("%q is not a duration; try 90m or 1h30m", args[1])
-		}
-		if dur <= 0 {
-			return fmt.Errorf("duration must be more than zero")
 		}
 	}
 	if len(args) > 2 {
@@ -309,17 +308,9 @@ func logSession(out io.Writer, cfg config.Config, st *store.Store, hs *habit.Sto
 		when = day.Add(12 * time.Hour)
 	}
 
-	mins := int(dur.Round(time.Minute) / time.Minute)
-	if mins <= 0 {
-		return fmt.Errorf("that rounds to no minutes at all")
-	}
-	sess := store.Session{
-		Start: when,
-		Mins:  mins,
-		Habit: h.ID,
-		Task:  h.Name,
-		Phase: store.PhaseFocus,
-		Done:  true,
+	sess, err := store.ManualSession(h, dur, when)
+	if err != nil {
+		return err
 	}
 	if err := st.Append(sess); err != nil {
 		return err
@@ -333,7 +324,7 @@ func logSession(out io.Writer, cfg config.Config, st *store.Store, hs *habit.Sto
 	active := list.Active()
 	progress := store.Progress(sessions, active, now)
 
-	fmt.Fprintf(out, "logged %s to %s\n\n", habit.FormatMinutes(mins), h.Name)
+	fmt.Fprintf(out, "logged %s to %s\n\n", habit.FormatMinutes(sess.Mins), h.Name)
 	fmt.Fprint(out, ui.HabitRowReport(pal, h, progress[h.ID]))
 	return nil
 }
@@ -346,6 +337,23 @@ func terminalWidth() int {
 		return w
 	}
 	return 0
+}
+
+// printToday prints the check-off list. It reports only: ticking a habit off
+// non-interactively is what `pomo -log` is for.
+func printToday(out io.Writer, cfg config.Config, st *store.Store, hs *habit.Store, now time.Time) error {
+	list, err := hs.Load()
+	if err != nil {
+		return err
+	}
+	sessions, _, err := st.Load()
+	if err != nil {
+		return err
+	}
+	pal, _ := theme.ByName(cfg.Theme)
+	active := list.Active()
+	fmt.Fprint(out, ui.TodayReport(pal, active, store.Progress(sessions, active, now)))
+	return nil
 }
 
 func printHabits(cfg config.Config, st *store.Store, hs *habit.Store) error {

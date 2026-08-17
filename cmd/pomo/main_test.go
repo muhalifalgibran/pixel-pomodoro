@@ -190,3 +190,24 @@ func TestResolveVersionFallsBackToDev(t *testing.T) {
 		t.Error("resolveVersion() returned an empty string")
 	}
 }
+
+func TestPrintTodayReportsTheChecklist(t *testing.T) {
+	cfg, st, hs := logFixture(t)
+	var out bytes.Buffer
+
+	if err := logSession(&out, cfg, st, hs, []string{"reading time"}, "", now()); err != nil {
+		t.Fatalf("logSession() error = %v", err)
+	}
+	out.Reset()
+
+	if err := printToday(&out, cfg, st, hs, now()); err != nil {
+		t.Fatalf("printToday() error = %v", err)
+	}
+
+	got := out.String()
+	for _, want := range []string{"TODAY", "1 of 2 done", "[x]", "[ ]", "reading time", "work"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("-today output is missing %q:\n%s", want, got)
+		}
+	}
+}

@@ -62,6 +62,9 @@ made of. Run `pomo -demo` to see it properly.
   digits roll over like an odometer.
 - **A countdown that escalates.** The last ten seconds shift to amber, glow
   harder, and shake on the beat.
+- **Tick a habit off without the timer.** `l` opens today's checklist; `space`
+  credits one session, `u` takes it back. Some habits you want the clock to make
+  you do; some you already did.
 - **Log work you did elsewhere.** `pomo -log work 90m`, so the bars do not lie
   about your day.
 - **Picks up where you left off.** Quit mid-session and the next launch resumes
@@ -135,6 +138,7 @@ pomo -habit work                      # start straight on a habit
 pomo -zen                             # open-ended stopwatch, no goal
 pomo -log work 90m                    # log work you did away from the terminal
 pomo -log reading                     # log one session at that habit's length
+pomo -today                           # print today's checklist and progress
 pomo -habits                          # print the habit list and progress
 pomo -stats                           # print stats and contribution bars
 pomo --update                         # install the latest release
@@ -146,6 +150,7 @@ pomo --update                         # install the latest release
 | `s` | Skip the current phase |
 | `r` | Restart the current phase |
 | `h` | Habits: pick, add, edit, remove |
+| `l` | Today's checklist: tick a habit off without the timer |
 | `t` | Stats and contribution bars |
 | `z` | Zen mode on or off |
 | `e` | Free-text note (when no habit is active) |
@@ -154,6 +159,9 @@ pomo --update                         # install the latest release
 
 In the habit list: `j`/`k` move, `enter` starts the one under the cursor, `a`
 adds, `E` edits, `d` removes.
+
+In the checklist: `j`/`k` move, `space` ticks the one under the cursor off,
+`u` takes the last tick back, `enter` starts the timer on it instead.
 
 ## Updating
 
@@ -212,6 +220,27 @@ Habits live in `habits.json` in the config directory, written atomically. They
 sit with your config rather than beside your session log on purpose: habit
 definitions are intent, sessions are history, and clearing your history should
 not cost you your habit list.
+
+### Two ways to move a goal
+
+The timer is one way to feed a habit, not the only one. Press `l` for today's
+checklist:
+
+```
+TODAY  1 of 2 done
+
+  [x] reading              done              ▰▰▰▰▰▰▰▰▰▰   1d
+▸ [ ] work                 0m / 4h           ▱▱▱▱▱▱▱▱▱▱    –
+```
+
+`space` credits one session — the habit's own focus length, exactly what
+`pomo -log reading` records — so a "1 session a day" goal is done in one press,
+and a "4h a day" goal fills a session at a time rather than in one lie. `u`
+takes the last tick back, while it is still the newest thing in the log. `enter`
+starts the timer on that habit instead, for the ones you want to be made to do.
+
+A tick is an ordinary session in the log. Nothing downstream can tell it apart
+from timed work, which is why the streaks and bars keep adding up.
 
 ### Streaks and the contribution bar
 
@@ -287,6 +316,12 @@ Finished sessions are appended to `$XDG_DATA_HOME/pomo/sessions.jsonl`
 therefore keeps every session it earned. Lines written before habits existed
 carry only `task`, and are matched against habit names when read — nothing on
 disk is ever rewritten.
+
+The log is append-only with exactly one exception: `u` on the checklist
+truncates the tick you just made, and only while that tick is still the last
+line in the file. If anything else has landed since — a finished phase, a
+`pomo -log` from another terminal — it refuses rather than guess. Nothing
+before that line is ever read or rewritten, so history cannot be lost to it.
 
 XP, level and streak are **derived by replaying that log** at launch. Nothing
 caches them, so the numbers cannot drift out of sync with the sessions that
@@ -386,7 +421,7 @@ internal/habit/      habit definitions, goals, and their atomic JSON store
 internal/notify/     macOS notification and sound, stubbed elsewhere
 internal/paths/      where config and data live
 internal/selfupdate/ --update: fetch, verify and swap the binary
-internal/ui/         Bubble Tea model, HUD layout, stats screen
+internal/ui/         Bubble Tea model, HUD layout, stats and checklist screens
 assets/sprites/      the art
 ```
 

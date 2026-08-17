@@ -309,11 +309,18 @@ func helpFits(pal theme.Palette, parts []string, width int) bool {
 // grouped in threes to make full columns rather than stranding a primary key in
 // a near-empty one.
 var (
+	// A tenth entry makes a four-column grid with a single cell in the last
+	// column, so the least important key goes last rather than stranding a
+	// primary one out there on its own.
 	timerKeys = []string{
 		"space pause", "s skip", "r reset",
-		"h habits", "t stats", "z zen",
-		"e note", "q quit", "/ hide",
+		"h habits", "l log", "t stats",
+		"z zen", "e note", "q quit",
+		"/ hide",
 	}
+	// Zen deliberately does not advertise l. This set fits on one line with
+	// nothing to spare, and a sixth entry would drop it into the grid; the key
+	// still works, since it belongs to normal mode either way.
 	zenKeys = []string{
 		"space pause", "z stop", "t stats",
 		"q quit", "/ hide",
@@ -324,6 +331,11 @@ var (
 		"j/k move", "enter start", "a add",
 		"E edit", "d delete", "esc back",
 	}
+	checkKeys = []string{
+		"j/k move", "space done", "u undo",
+		"enter start", "esc back", "q quit",
+	}
+	checkEmptyKeys  = []string{"h habits", "esc back"}
 	habitsEmptyKeys = []string{"a add", "esc back"}
 	formKeys        = []string{"tab field", "enter save", "esc cancel"}
 	confirmKeys     = []string{"y yes", "n no", "esc cancel"}

@@ -80,7 +80,6 @@ func habitsKeysFor(any bool) []string {
 // habitRow renders one line of the habit list.
 func habitRow(pal theme.Palette, h habit.Habit, p store.HabitProgress, selected, active bool) string {
 	accent := lipgloss.NewStyle().Foreground(lg(habitAccent(pal, h)))
-	dim := lipgloss.NewStyle().Foreground(lg(pal.AccentDim))
 	text := lipgloss.NewStyle().Foreground(lg(pal.Text))
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
 
@@ -95,26 +94,39 @@ func habitRow(pal theme.Palette, h habit.Habit, p store.HabitProgress, selected,
 		nameStyle = faint
 	}
 
-	full := 0
-	if p.Target > 0 {
-		full = clampInt(int(p.Fraction*float64(habitMeterWide)), 0, habitMeterWide)
-	}
-	meter := accent.Render(strings.Repeat("▰", full)) +
-		dim.Render(strings.Repeat("▱", habitMeterWide-full))
-
-	streak := "  –"
-	if p.Streak > 0 {
-		streak = fmt.Sprintf("%3s", fmt.Sprintf("%dd", p.Streak))
-		if h.Goal.Period == habit.Weekly {
-			streak = fmt.Sprintf("%3s", fmt.Sprintf("%dw", p.Streak))
-		}
-	}
-
 	return cursor +
 		nameStyle.Render(padPlain(name, habitNameWidth)) +
 		faint.Render(padPlain(h.Goal.Short(), habitGoalWidth)) +
 		accent.Render(padPlain(progressText(h, p), habitProgWidth)) +
-		meter + "  " + faint.Render(streak)
+		meterBar(pal, h, p, habitMeterWide) + "  " + faint.Render(streakText(h, p))
+}
+
+// meterBar is the filled-and-empty bar both habit rows draw. Shared so the
+// habit list and the check-off screen cannot end up disagreeing about how full
+// a goal looks.
+func meterBar(pal theme.Palette, h habit.Habit, p store.HabitProgress, width int) string {
+	accent := lipgloss.NewStyle().Foreground(lg(habitAccent(pal, h)))
+	dim := lipgloss.NewStyle().Foreground(lg(pal.AccentDim))
+
+	full := 0
+	if p.Target > 0 {
+		full = clampInt(int(p.Fraction*float64(width)), 0, width)
+	}
+	return accent.Render(strings.Repeat("▰", full)) +
+		dim.Render(strings.Repeat("▱", width-full))
+}
+
+// streakText is the three-cell streak column: days for a daily goal, weeks for
+// a weekly one, an en dash for no streak at all.
+func streakText(h habit.Habit, p store.HabitProgress) string {
+	if p.Streak <= 0 {
+		return "  –"
+	}
+	unit := "d"
+	if h.Goal.Period == habit.Weekly {
+		unit = "w"
+	}
+	return fmt.Sprintf("%3s", fmt.Sprintf("%d%s", p.Streak, unit))
 }
 
 // progressText spells out where a habit stands in its current period.

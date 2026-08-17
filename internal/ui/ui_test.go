@@ -200,7 +200,15 @@ func TestFullViewSurvivesAnOverlongTask(t *testing.T) {
 }
 
 func TestHelpBlockIsAGridOfColumns(t *testing.T) {
-	rows := helpBlock(theme.Ember, timerKeys, 60)
+	// A fixture rather than a real key set: this states the layout rule, and a
+	// screen gaining a key should not have to come and rewrite it. That the
+	// real sets fit is TestEveryLegendFitsUnderTheFrame's job.
+	nine := []string{
+		"space pause", "s skip", "r reset",
+		"h habits", "t stats", "z zen",
+		"e note", "q quit", "/ hide",
+	}
+	rows := helpBlock(theme.Ember, nine, 60)
 
 	if len(rows) != helpRows {
 		t.Fatalf("helpBlock returned %d rows, want %d", len(rows), helpRows)
@@ -242,6 +250,8 @@ func TestEveryLegendFitsUnderTheFrame(t *testing.T) {
 		"editing":      editingKeys,
 		"habits":       habitsKeys,
 		"habits empty": habitsEmptyKeys,
+		"check":        checkKeys,
+		"check empty":  checkEmptyKeys,
 		"form":         formKeys,
 		"confirm":      confirmKeys,
 		"stats":        statsKeys,
@@ -2224,5 +2234,307 @@ func TestGoalDescribe(t *testing.T) {
 		if got := tt.goal.Describe(); got != tt.want {
 			t.Errorf("Describe(%+v) = %q, want %q", tt.goal, got, tt.want)
 		}
+	}
+}
+
+// --- the check-off screen ---
+
+// tickOff presses space on the check-off screen, the way a real terminal sends
+// it.
+func tickOff(m *Model) {
+	m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+}
+
+func TestChecklistOpensAndListsEveryHabit(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240), sessionsHabit("reading", 1))
+	sizeTo(m, 100, 40)
+
+	press(m, "l")
+	if m.mode != modeCheck {
+		t.Fatal("l did not open the check-off screen")
+	}
+
+	out := m.View()
+	for _, want := range []string{"TODAY", "0 of 2 done", "work", "reading", "[ ]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("check-off screen is missing %q:\n%s", want, out)
+		}
+	}
+
+	press(m, "esc")
+	if m.mode != modeNormal {
+		t.Error("esc did not leave the check-off screen")
+	}
+	press(m, "l")
+	press(m, "l")
+	if m.mode != modeNormal {
+		t.Error("l did not toggle back out of the check-off screen")
+	}
+}
+
+func TestTickingOffLogsOneSessionAtTheHabitsFocusLength(t *testing.T) {
+	work := minutesHabit("work", 240)
+	work.Focus = 50 * time.Minute
+	m, st, _ := habitModel(t, work)
+
+	press(m, "l")
+	tickOff(m)
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("logged %d sessions, want 1", len(sessions))
+	}
+	got := sessions[0]
+	if got.Mins != 50 {
+		t.Errorf("logged %d minutes, want the habit's own 50", got.Mins)
+	}
+	if got.Habit != "work" || got.Phase != store.PhaseFocus || !got.Done {
+		t.Errorf("logged %+v, want a completed focus credited to work", got)
+	}
+}
+
+func TestTickingOffMeetsASingleSessionGoal(t *testing.T) {
+	m, _, _ := habitModel(t, sessionsHabit("reading", 1))
+	sizeTo(m, 100, 40)
+
+	press(m, "l")
+	tickOff(m)
+
+	if !m.progress["reading"].Met {
+		t.Fatal("one tick did not meet a one-session goal")
+	}
+	out := m.View()
+	for _, want := range []string{"[x]", "done", "1 of 1 done", "goal met"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("screen is missing %q after ticking off:\n%s", want, out)
+		}
+	}
+}
+
+// A time goal is not satisfied by one press. It fills a session at a time, so
+// the screen never claims work that did not happen.
+func TestTickingOffFillsATimeGoalOneSessionAtATime(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	sizeTo(m, 100, 40)
+	press(m, "l")
+
+	for i := 0; i < 4; i++ {
+		tickOff(m)
+	}
+
+	p := m.progress["work"]
+	if p.Value != 100 {
+		t.Errorf("value = %d, want 100 after four 25m ticks", p.Value)
+	}
+	if p.Met {
+		t.Error("four ticks met a four-hour goal")
+	}
+	if out := m.View(); !strings.Contains(out, "1h 40m / 4h") {
+		t.Errorf("screen does not spell out the progress:\n%s", out)
+	}
+}
+
+// Ticking a habit off says something about the past. The clock is about the
+// present, and must not be disturbed by it.
+func TestTickingOffLeavesTheRunningTimerAlone(t *testing.T) {
+	m, st, _ := habitModel(t, minutesHabit("work", 240), sessionsHabit("reading", 1))
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // work
+	tick(m, 5*time.Minute)
+
+	remaining, task := m.timer.Remaining, m.timer.Task
+	running := m.timer.Running
+
+	press(m, "l")
+	press(m, "j")
+	tickOff(m) // reading
+
+	if m.timer.Remaining != remaining || m.timer.Running != running || m.timer.Task != task {
+		t.Errorf("ticking off disturbed the timer: remaining %v→%v, running %v→%v, task %q→%q",
+			remaining, m.timer.Remaining, running, m.timer.Running, task, m.timer.Task)
+	}
+	if m.activeID != "work" {
+		t.Errorf("activeID = %q, want work", m.activeID)
+	}
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Habit != "reading" {
+		t.Errorf("logged %+v, want just the reading tick", sessions)
+	}
+}
+
+func TestUndoTakesBackTheLastTick(t *testing.T) {
+	m, st, _ := habitModel(t, sessionsHabit("reading", 1))
+	sizeTo(m, 100, 40)
+
+	press(m, "l")
+	tickOff(m)
+	press(m, "u")
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("log still holds %d sessions after undo", len(sessions))
+	}
+	if m.progress["reading"].Met {
+		t.Error("habit still reads as met after undo")
+	}
+	if m.stats.XP != 0 {
+		t.Errorf("XP = %d after undo, want 0", m.stats.XP)
+	}
+	if out := m.View(); !strings.Contains(out, "[ ]") {
+		t.Errorf("row is still ticked after undo:\n%s", out)
+	}
+}
+
+// One step only. A deeper stack over an append-only log costs more than the
+// mis-press it would cover.
+func TestUndoOnlyGoesBackOneStep(t *testing.T) {
+	m, st, _ := habitModel(t, minutesHabit("work", 240))
+	sizeTo(m, 100, 40)
+
+	press(m, "l")
+	tickOff(m)
+	tickOff(m)
+	press(m, "u")
+	press(m, "u")
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("log holds %d sessions, want 1", len(sessions))
+	}
+	if out := m.View(); !strings.Contains(out, "nothing to undo") {
+		t.Errorf("second undo did not say it had nothing to do:\n%s", out)
+	}
+}
+
+// `pomo -log` in another terminal lands after the tick. Undo must refuse rather
+// than delete somebody else's session.
+func TestUndoRefusesOnceTheLogHasMovedOn(t *testing.T) {
+	m, st, _ := habitModel(t, sessionsHabit("reading", 1))
+	sizeTo(m, 100, 40)
+
+	press(m, "l")
+	tickOff(m)
+	if err := st.Append(store.Session{
+		Start: time.Now(), Mins: 25, Habit: "reading", Phase: store.PhaseFocus, Done: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	press(m, "u")
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("log holds %d sessions, want both left alone", len(sessions))
+	}
+	if out := m.View(); !strings.Contains(out, "moved on") {
+		t.Errorf("screen does not explain the refusal:\n%s", out)
+	}
+}
+
+// A finished phase landing on top disarms undo, so [u] can never reach past it
+// into a real session.
+func TestUndoIsDisarmedByATimerSession(t *testing.T) {
+	m, st, _ := habitModel(t, minutesHabit("work", 240))
+	press(m, "l")
+	tickOff(m)
+	press(m, "esc")
+
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // start work
+	tick(m, 26*time.Minute)                  // run the focus phase out
+
+	press(m, "l")
+	press(m, "u")
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Errorf("log holds %d sessions, want the tick and the phase both intact", len(sessions))
+	}
+}
+
+func TestChecklistEnterStartsTheTimerOnThatHabit(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240), sessionsHabit("reading", 1))
+
+	press(m, "l")
+	press(m, "j")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.mode != modeNormal {
+		t.Error("enter did not return to the HUD")
+	}
+	if m.activeID != "reading" {
+		t.Errorf("activeID = %q, want reading", m.activeID)
+	}
+	if !m.timer.Running {
+		t.Error("enter did not start the timer")
+	}
+}
+
+func TestCheckRowsFitTheFrame(t *testing.T) {
+	m, _, _ := habitModel(t,
+		minutesHabit("a habit with a very long name indeed", 240),
+		habit.Habit{Name: "gym", Goal: habit.Goal{Target: 3, Unit: habit.Sessions, Period: habit.Weekly}},
+	)
+	press(m, "l")
+
+	body := checkView(theme.Ember, m.habits.Active(), m.progress, 0, "", "logged 25m to gym — u to undo")
+	for i, line := range strings.Split(body, "\n") {
+		if got := lipgloss.Width(line); got > m.geom.BandW+2 {
+			t.Errorf("check row %d is %d cells wide, wider than the %d-cell frame",
+				i, got, m.geom.BandW+2)
+		}
+	}
+}
+
+func TestEmptyChecklistExplainsItself(t *testing.T) {
+	m, _ := testModel(t, nil)
+	sizeTo(m, 100, 40)
+
+	press(m, "l")
+	tickOff(m) // must not panic on an empty list
+	press(m, "u")
+
+	out := m.View()
+	if !strings.Contains(out, "TODAY") || !strings.Contains(out, "Add a habit") {
+		t.Errorf("empty check-off screen does not explain itself:\n%s", out)
+	}
+}
+
+// A pomo left open overnight must not keep showing yesterday's checklist.
+func TestProgressRecomputesWhenTheDayTurnsOver(t *testing.T) {
+	m, _, _ := habitModel(t, sessionsHabit("reading", 1))
+	press(m, "l")
+	tickOff(m)
+
+	if !m.progress["reading"].Met {
+		t.Fatal("the tick did not meet the goal")
+	}
+
+	// Midnight passes with nothing else logged.
+	m.advance(m.lastTick.AddDate(0, 0, 1))
+
+	if m.progress["reading"].Met {
+		t.Error("yesterday's tick still reads as today's")
+	}
+	if m.progress["reading"].Streak == 0 {
+		t.Error("the streak was lost along with the day")
 	}
 }

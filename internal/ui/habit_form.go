@@ -41,9 +41,14 @@ func newHabitForm(h *habit.Habit) *form {
 				},
 			},
 			{
-				label: "colour",
-				hint:  "optional",
-				help:  []string{"#ff7043  warm orange", "#7fb3c8  cool blue", "leave empty to use the theme"},
+				label:   "colour",
+				hint:    "optional — one is picked for you",
+				preview: previewColor,
+				help: []string{
+					"#ff7043  warm orange",
+					"#7fb3c8  cool blue",
+					"leave empty and pomo assigns one you can change later",
+				},
 			},
 			{
 				label: "focus",
@@ -86,6 +91,18 @@ func previewGoal(v string) string {
 		return "not a goal yet"
 	}
 	return g.Describe()
+}
+
+// previewColor reports whether a typed colour is usable, since a wrong one is
+// otherwise only discovered on save.
+func previewColor(v string) string {
+	if v == "" {
+		return "one will be picked for you"
+	}
+	if _, err := canvas.ParseHex(v); err != nil {
+		return "not a colour yet — needs #rrggbb"
+	}
+	return "looks good"
 }
 
 // durationField renders an optional duration, leaving zero blank rather than

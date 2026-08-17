@@ -196,7 +196,17 @@ read as you type — `4h` becomes `→ 4h a day`, nonsense becomes
 A bare number counts sessions, so `3` is the same as `3 sessions`.
 
 A habit can also carry its own **focus length**, so `work` runs 50/10 while
-`reading` runs 25/5, and its own **accent colour**.
+`reading` runs 25/5.
+
+**Colours are assigned for you.** Leave the colour field empty and pomo picks
+one, preferring a colour nothing else is using, so your first eight habits are
+all visually distinct. It is written into `habits.json`, so you can change it
+whenever you like — and clearing the field asks for a new one rather than for no
+colour.
+
+They come from a curated set rather than being genuinely random: random RGB
+lands on muddy browns and near-blacks that vanish against the dark panel, and a
+colour that changed between launches would defeat the point of having one.
 
 Habits live in `habits.json` in the config directory, written atomically. They
 sit with your config rather than beside your session log on purpose: habit

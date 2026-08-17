@@ -175,6 +175,74 @@ func cutSuffix(s, suffix string) (string, bool) {
 	return s, false
 }
 
+// Colors are the palette a habit's accent is drawn from when none is given.
+//
+// A curated set rather than a random RGB value: random colours land on muddy
+// browns and near-blacks that vanish against the dark HUD panel, so roughly a
+// third of them would be unreadable. These are all bright enough to read on it
+// and far enough apart to tell one habit's bar from another's.
+var Colors = []string{
+	"#ff7043", // warm orange
+	"#4dd0a7", // mint
+	"#8b7cf0", // violet
+	"#4dd0e1", // cyan
+	"#ffd54f", // amber
+	"#f06292", // pink
+	"#aed581", // lime
+	"#7fb3c8", // slate blue
+}
+
+// ColorFor picks a habit's colour from the palette, derived from its ID.
+//
+// Derived rather than actually random, because a colour that changed between
+// launches would make the habit unrecognisable — the whole point of giving each
+// one a colour is that you learn to spot it.
+func ColorFor(id string) string {
+	return Colors[int(hash(id)%uint32(len(Colors)))]
+}
+
+// pickColor chooses a colour for a new habit, preferring one nothing else is
+// using. Starting the search at a position derived from the ID keeps the first
+// habit from always being orange, while still guaranteeing the first eight
+// habits are all different.
+func pickColor(id string, taken map[string]bool) string {
+	start := int(hash(id) % uint32(len(Colors)))
+	for i := 0; i < len(Colors); i++ {
+		c := Colors[(start+i)%len(Colors)]
+		if !taken[c] {
+			return c
+		}
+	}
+	// More habits than colours; reuse rather than leave one blank.
+	return Colors[start]
+}
+
+// hash is FNV-1a, inlined to keep this package free of dependencies it does not
+// otherwise need.
+func hash(s string) uint32 {
+	const (
+		offset = 2166136261
+		prime  = 16777619
+	)
+	h := uint32(offset)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime
+	}
+	return h
+}
+
+// takenColors is the set of colours already in use.
+func (l List) takenColors(exceptID string) map[string]bool {
+	taken := make(map[string]bool, len(l.Habits))
+	for _, h := range l.Habits {
+		if h.ID != exceptID && h.Color != "" {
+			taken[h.Color] = true
+		}
+	}
+	return taken
+}
+
 // Habit is one tracked habit.
 type Habit struct {
 	// ID is a stable slug assigned at creation. It never changes, so renaming
@@ -326,6 +394,12 @@ func (l *List) Add(h Habit, now time.Time) (Habit, error) {
 	}
 	h.ID = l.NextID(h.Name)
 	h.Created = now
+	// An empty colour is filled in rather than left to the phase palette, so
+	// every habit has a stable identity you can learn to recognise. It is
+	// written to habits.json, so it stays visible and editable.
+	if h.Color == "" {
+		h.Color = pickColor(h.ID, l.takenColors(""))
+	}
 	l.Habits = append(l.Habits, h)
 	return h, nil
 }
@@ -341,6 +415,10 @@ func (l *List) Update(h Habit) error {
 		if l.Habits[i].ID == h.ID {
 			h.Created = l.Habits[i].Created
 			h.Archived = l.Habits[i].Archived
+			// Clearing the colour asks for a new one, not for no colour.
+			if h.Color == "" {
+				h.Color = pickColor(h.ID, l.takenColors(h.ID))
+			}
 			l.Habits[i] = h
 			return nil
 		}

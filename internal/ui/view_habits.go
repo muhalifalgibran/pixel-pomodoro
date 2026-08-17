@@ -158,15 +158,23 @@ func progressText(h habit.Habit, p store.HabitProgress) string {
 	}
 }
 
-// habitAccent is the colour to draw a habit in: its own if set, otherwise the
-// palette's. A colour that fails to parse falls back rather than erroring —
-// habits are validated on save, so reaching here means the file was hand-edited
-// and a wrong colour should not stop the screen rendering.
+// habitAccent is the colour to draw a habit in.
+//
+// A habit saved through pomo always has one. A hand-edited habits.json might
+// not, and one derived from the ID is better than the phase accent there: the
+// phase accent shifts as the timer moves through focus and breaks, so the
+// habit would keep changing colour.
+//
+// An unparseable colour falls back rather than erroring. Habits are validated
+// on save, so reaching here means the file was edited by hand, and a wrong
+// colour should not stop the screen rendering.
 func habitAccent(pal theme.Palette, h habit.Habit) canvas.RGBA {
-	if h.Color != "" {
-		if c, err := canvas.ParseHex(h.Color); err == nil {
-			return c
-		}
+	hex := h.Color
+	if hex == "" {
+		hex = habit.ColorFor(h.ID)
+	}
+	if c, err := canvas.ParseHex(hex); err == nil {
+		return c
 	}
 	return pal.Accent
 }

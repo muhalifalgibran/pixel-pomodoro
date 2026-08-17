@@ -1,9 +1,12 @@
 package habit
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/muhalifalgibran/pixel-pomodoro/internal/canvas"
 )
 
 func TestGoalStringRoundTrip(t *testing.T) {
@@ -328,4 +331,140 @@ func TestNames(t *testing.T) {
 	if got, want := strings.Join(l.Names(), ", "), "work, reading"; got != want {
 		t.Errorf("Names() = %q, want %q", got, want)
 	}
+}
+
+func TestAddAssignsAColourWhenNoneIsGiven(t *testing.T) {
+	var l List
+	h, err := l.Add(Habit{Name: "work", Goal: Goal{Target: 1}}, now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Color == "" {
+		t.Fatal("no colour was assigned")
+	}
+	// It is one of the curated set, not an arbitrary value.
+	if !slicesContains(Colors, h.Color) {
+		t.Errorf("Color = %q, want one of the palette %v", h.Color, Colors)
+	}
+	// And it was stored, so it is visible and editable in habits.json.
+	if got, _ := l.ByID("work"); got.Color != h.Color {
+		t.Errorf("stored colour = %q, want %q", got.Color, h.Color)
+	}
+}
+
+func TestAddKeepsAnExplicitColour(t *testing.T) {
+	var l List
+	h, err := l.Add(Habit{Name: "work", Goal: Goal{Target: 1}, Color: "#123456"}, now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Color != "#123456" {
+		t.Errorf("Color = %q, want the explicit one kept", h.Color)
+	}
+}
+
+// The first habits must all look different, or the colours are useless for
+// telling one bar from another.
+func TestAssignedColoursAreDistinctUntilThePaletteRunsOut(t *testing.T) {
+	var l List
+	seen := map[string]int{}
+	for i := 0; i < len(Colors); i++ {
+		h, err := l.Add(Habit{Name: "habit " + strconv.Itoa(i), Goal: Goal{Target: 1}}, now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[h.Color]++
+	}
+	if len(seen) != len(Colors) {
+		t.Errorf("%d habits share %d colours, want all %d distinct", len(Colors), len(seen), len(Colors))
+	}
+
+	// Past the palette size it reuses rather than leaving one blank.
+	h, err := l.Add(Habit{Name: "one too many", Goal: Goal{Target: 1}}, now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Color == "" {
+		t.Error("a habit past the palette size got no colour")
+	}
+}
+
+// A colour that changed between launches would defeat the point of having one.
+func TestColorForIsStable(t *testing.T) {
+	first := ColorFor("vibe-antarta")
+	for i := 0; i < 20; i++ {
+		if got := ColorFor("vibe-antarta"); got != first {
+			t.Fatalf("ColorFor is not deterministic: %q then %q", first, got)
+		}
+	}
+	if !slicesContains(Colors, first) {
+		t.Errorf("ColorFor returned %q, which is not in the palette", first)
+	}
+}
+
+func TestColorForVariesByID(t *testing.T) {
+	seen := map[string]bool{}
+	for _, id := range []string{"work", "reading", "gym", "vibe-antarta", "writing", "study"} {
+		seen[ColorFor(id)] = true
+	}
+	if len(seen) < 3 {
+		t.Errorf("six habits produced only %d distinct colours; the spread is too narrow", len(seen))
+	}
+}
+
+// Every palette entry has to be readable, which means parseable and not so dark
+// it disappears against the panel.
+func TestPaletteColoursAreUsable(t *testing.T) {
+	for _, c := range Colors {
+		col, err := canvas.ParseHex(c)
+		if err != nil {
+			t.Errorf("palette colour %q does not parse: %v", c, err)
+			continue
+		}
+		// Rough perceived brightness. The HUD panel is around #141218, so
+		// anything this dark would vanish into it.
+		lum := 0.299*float64(col.R) + 0.587*float64(col.G) + 0.114*float64(col.B)
+		if lum < 90 {
+			t.Errorf("palette colour %q is too dark to read on the panel (luminance %.0f)", c, lum)
+		}
+	}
+}
+
+// Clearing the colour in the form asks for a new one, not for no colour.
+func TestUpdateRefillsAClearedColour(t *testing.T) {
+	var l List
+	h, _ := l.Add(Habit{Name: "work", Goal: Goal{Target: 1}}, now())
+
+	cleared := h
+	cleared.Color = ""
+	if err := l.Update(cleared); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := l.ByID("work")
+	if got.Color == "" {
+		t.Error("clearing the colour left the habit without one")
+	}
+}
+
+func TestUpdateKeepsAnExplicitColour(t *testing.T) {
+	var l List
+	h, _ := l.Add(Habit{Name: "work", Goal: Goal{Target: 1}}, now())
+
+	h.Color = "#abcdef"
+	if err := l.Update(h); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := l.ByID("work"); got.Color != "#abcdef" {
+		t.Errorf("Color = %q, want the explicit one kept", got.Color)
+	}
+}
+
+func slicesContains(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
 }

@@ -13,15 +13,35 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/muhalifalgibran/pixel-pomodoro/internal/paths"
+)
+
+// Phase names as they appear in the log. Zen is the open-ended stopwatch, which
+// is real work but belongs to no habit.
+const (
+	PhaseFocus = "focus"
+	PhaseZen   = "zen"
 )
 
 // Session is one line of the log.
 type Session struct {
 	Start time.Time `json:"start"`
 	Mins  int       `json:"mins"`
-	Task  string    `json:"task,omitempty"`
-	Phase string    `json:"phase"`
-	Done  bool      `json:"done"`
+	// Habit is the stable habit ID this session counts toward. Empty means it
+	// belongs to no habit — a zen session, or a free-text task.
+	Habit string `json:"habit,omitempty"`
+	// Task is the habit's display name, or a free-text label. Kept alongside
+	// Habit so the log stays readable and greppable by hand.
+	Task  string `json:"task,omitempty"`
+	Phase string `json:"phase"`
+	Done  bool   `json:"done"`
+}
+
+// IsWork reports whether a session counts as focused work: a finished focus
+// phase or a finished zen stretch, with time actually on the clock.
+func (s Session) IsWork() bool {
+	return s.Done && s.Mins > 0 && (s.Phase == PhaseFocus || s.Phase == PhaseZen)
 }
 
 // Store is an append-only session log.
@@ -35,16 +55,7 @@ func (s *Store) Path() string { return s.path }
 
 // DefaultPath is $XDG_DATA_HOME/pomo/sessions.jsonl, falling back to
 // ~/.local/share/pomo/sessions.jsonl.
-func DefaultPath() (string, error) {
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "pomo", "sessions.jsonl"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("locate home directory: %w", err)
-	}
-	return filepath.Join(home, ".local", "share", "pomo", "sessions.jsonl"), nil
-}
+func DefaultPath() (string, error) { return paths.DataFile("sessions.jsonl") }
 
 // Append writes one session. Each call is a single O_APPEND write of one line,
 // so a crash mid-session cannot corrupt history already on disk.
@@ -117,6 +128,13 @@ type Stats struct {
 	TodayMins     int
 	WeekMins      int
 
+	// Zen totals are broken out because zen time belongs to no habit: it earns
+	// XP and keeps the global streak alive, but appears in no habit's bar, so
+	// the stats screen has to account for it separately or it looks like the
+	// time went missing.
+	ZenTodayMins int
+	ZenWeekMins  int
+
 	// ByDay holds the last DaysCharted days of completed focus minutes,
 	// oldest first, for the stats screen's bar chart.
 	ByDay []DayTotal
@@ -167,7 +185,7 @@ func Compute(sessions []Session, now time.Time) Stats {
 	perDaySessions := map[string]int{}
 
 	for _, s := range sessions {
-		if !s.Done || s.Phase != "focus" || s.Mins <= 0 {
+		if !s.IsWork() {
 			continue
 		}
 		st.XP += s.Mins
@@ -177,12 +195,21 @@ func Compute(sessions []Session, now time.Time) Stats {
 		perDay[key] += s.Mins
 		perDaySessions[key]++
 
+		inWeek := !day.Before(weekStart) && !day.After(today)
 		if day.Equal(today) {
 			st.TodayMins += s.Mins
 			st.TodaySessions++
 		}
-		if !day.Before(weekStart) && !day.After(today) {
+		if inWeek {
 			st.WeekMins += s.Mins
+		}
+		if s.Phase == PhaseZen {
+			if day.Equal(today) {
+				st.ZenTodayMins += s.Mins
+			}
+			if inWeek {
+				st.ZenWeekMins += s.Mins
+			}
 		}
 	}
 

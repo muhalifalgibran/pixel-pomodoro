@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/muhalifalgibran/pixel-pomodoro/internal/paths"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/theme"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/timer"
 )
@@ -57,15 +57,8 @@ func Default() Config {
 	}
 }
 
-// DefaultPath is $XDG_CONFIG_HOME/pomo/config.toml, falling back to
-// ~/.config/pomo/config.toml.
-func DefaultPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("locate config directory: %w", err)
-	}
-	return filepath.Join(dir, "pomo", "config.toml"), nil
-}
+// DefaultPath is config.toml in pomo's config directory.
+func DefaultPath() (string, error) { return paths.ConfigFile("config.toml") }
 
 // Duration wraps time.Duration so TOML can carry "25m" instead of a
 // nanosecond count.

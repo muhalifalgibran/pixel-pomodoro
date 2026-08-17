@@ -2,16 +2,12 @@ package ui
 
 import (
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
-	"github.com/muhalifalgibran/pixel-pomodoro/assets"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/anim"
-	"github.com/muhalifalgibran/pixel-pomodoro/internal/canvas"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/config"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/notify"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/sprite"
@@ -434,105 +430,5 @@ func (m *Model) View() string {
 	if m.width > 0 && (m.width < m.geom.BandW+2 || m.height < m.requiredHeight()) {
 		return compactView(pal, m.timer, m.clockText(), m.stats)
 	}
-	return m.fullView(pal)
+	return m.hudView(pal)
 }
-
-func (m *Model) fullView(pal theme.Palette) string {
-	band := canvas.New(m.geom.BandW, m.geom.BandH)
-
-	b := breathFor(m.timer.Phase, m.timer.Running)
-	osc := 2*anim.Pulse(m.elapsed, b.period) - 1
-	// A one-pixel bob is half a cell, which is exactly the motion half-blocks
-	// buy. Forcing the offset even quantised it to two-pixel jumps, and on
-	// negative values Go's &^ rounds away from zero, so the mascot lurched
-	// down twice as far as it rose.
-	bob := int(math.Round(b.bob * osc))
-
-	blitSquash(
-		band, m.tomato.Canvas,
-		m.geom.SpriteX, m.geom.SpriteY+bob,
-		1+b.squash*osc,
-		spriteTransform(m.tomato, pal, m.timer.Progress()),
-	)
-
-	m.steam.Draw(band)
-
-	style, alert := clockStyleFor(pal, m.timer.Remaining, m.timer.Running)
-	jitter := 0
-	if alert {
-		// Two-frame shake, fast enough to read as urgency.
-		jitter = int(m.elapsed*8)%2*2 - 1
-	}
-	band.Blit(m.clk.draw(style, pal.Panel, alert, jitter), m.geom.ClockX, m.geom.ClockY)
-
-	m.confetti.Draw(band)
-
-	if m.cfg.Scanlines {
-		applyScanlines(band)
-	}
-
-	rows := strings.Split(band.Render(pal.Panel), "\n")
-	content := make([]string, 0, len(rows)+3)
-	content = append(content, statusBar(pal, m.stats, m.geom.BandW))
-	content = append(content, rows...)
-	content = append(content, progressBar(pal, m.timer, m.geom.BandW))
-	content = append(content, taskLine(pal, m.displayTask(), m.mode == modeEditTask, m.resumed, m.geom.BandW))
-
-	out := frameLines(pal, m.geom.BandW, content)
-	out = append(out, m.helpRowsFor(pal)...)
-	return strings.Join(out, "\n")
-}
-
-// helpRowsFor returns the legend, the one-line hint, or the editing keys.
-// While editing, the legend is shown regardless of the toggle: enter and esc
-// are not guessable, and being stuck in a text field is worse than a few extra
-// rows.
-func (m *Model) helpRowsFor(pal theme.Palette) []string {
-	if m.mode == modeEditTask {
-		return helpBlock(pal, true)
-	}
-	if !m.showHelp {
-		return helpHint(pal)
-	}
-	return helpBlock(pal, false)
-}
-
-// requiredHeight is the rows the full HUD needs: two borders, the status bar,
-// the art band, the progress and task lines, and however many rows the legend
-// currently occupies.
-func (m *Model) requiredHeight() int {
-	help := 1
-	if m.showHelp || m.mode == modeEditTask {
-		help = helpRows
-	}
-	return 2 + 3 + m.geom.BandH/2 + help
-}
-
-func (m *Model) displayTask() string {
-	if m.mode == modeEditTask {
-		return m.taskInput
-	}
-	return m.timer.Task
-}
-
-// compactView is the fallback for terminals too small for the art.
-func compactView(pal theme.Palette, s *timer.State, clockText string, st store.Stats) string {
-	text := lipgloss.NewStyle().Foreground(lg(pal.Text)).Bold(true)
-	accent := lipgloss.NewStyle().Foreground(lg(pal.Accent))
-	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
-
-	label := strings.ToUpper(s.Phase.String())
-	if !s.Running {
-		label = "PAUSED"
-	}
-	lines := []string{
-		text.Render(clockText) + "  " + accent.Render(label),
-		faint.Render(meterFrac("▰", "▱", s.Progress(), 16)),
-		faint.Render("LV." + strconv.Itoa(st.Level) + "  " + strconv.Itoa(st.Streak) + "d streak"),
-		faint.Render("space pause · s skip · q quit"),
-	}
-	return strings.Join(lines, "\n")
-}
-
-// loadTomato parses the embedded mascot.
-func loadTomato() (*sprite.Sprite, error) { return assets.Sprite("tomato") }

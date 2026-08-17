@@ -2,16 +2,21 @@
 package main
 
 import (
+	"bufio"
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/config"
+	"github.com/muhalifalgibran/pixel-pomodoro/internal/selfupdate"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/store"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/theme"
 	"github.com/muhalifalgibran/pixel-pomodoro/internal/ui"
@@ -106,11 +111,17 @@ func run() error {
 	flag.BoolVar(&f.skipToEnd, "skip-to-end", false, "start one second from the end of a 1m phase, to verify completion")
 
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	update := flag.Bool("update", false, "download and install the latest release")
+	assumeYes := flag.Bool("y", false, "with -update, do not ask for confirmation")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("pomo %s\n", resolveVersion())
 		return nil
+	}
+
+	if *update {
+		return runUpdate(*assumeYes)
 	}
 
 	cfg, err := config.Load(f.configPath)
@@ -227,4 +238,39 @@ func runDemo(cfg config.Config, f flags) error {
 	}
 	fmt.Println(out)
 	return nil
+}
+
+// runUpdate replaces this binary with the newest published release.
+//
+// The archive is verified against the release's published SHA-256 before
+// anything is written, and the user is asked first unless -y is passed:
+// replacing an executable on someone's PATH is not something to do quietly.
+func runUpdate(assumeYes bool) error {
+	current := resolveVersion()
+
+	confirm := func(from, to string) bool {
+		fmt.Printf("update pomo %s -> %s? [y/N] ", from, to)
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			return false
+		}
+		answer := strings.ToLower(strings.TrimSpace(line))
+		return answer == "y" || answer == "yes"
+	}
+	if assumeYes {
+		confirm = nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	err := selfupdate.Run(ctx, selfupdate.Options{
+		Current: current,
+		Out:     os.Stdout,
+		Confirm: confirm,
+	})
+	if errors.Is(err, selfupdate.ErrUpToDate) {
+		return nil
+	}
+	return err
 }

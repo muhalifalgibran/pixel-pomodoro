@@ -119,6 +119,7 @@ pomo -theme indigo -no-sound          # quieter
 pomo -paused                          # set things up before starting
 pomo -fresh                           # ignore the saved position, start over
 pomo -stats                           # print progress and exit
+pomo --update                         # install the latest release
 ```
 
 | Key | Action |
@@ -130,6 +131,25 @@ pomo -stats                           # print progress and exit
 | `t` | Stats screen |
 | `/` | Show or hide the key legend |
 | `q` | Quit |
+
+## Updating
+
+```sh
+pomo --update
+```
+
+Fetches the latest release, checks the download against the SHA-256 published
+alongside it, and replaces the running binary in place. It asks first; `-y`
+skips the prompt.
+
+The checksum is not optional. An unverified archive is never extracted, never
+made executable and never written anywhere it could be run — a self-updater
+that skips that step is a remote code execution vector wearing a convenience
+feature's clothes. If a release ever ships without `checksums.txt`, the update
+refuses rather than installing blind.
+
+If pomo lives somewhere you cannot write, such as `/usr/local/bin`, use
+`sudo pomo --update`.
 
 ## Configuration
 
@@ -240,6 +260,7 @@ debuggable.
 | `-demo -svg out.svg` | Write the art to an SVG (this is how the image above is made) |
 | `-tick-scale 60` | Multiply elapsed time; fast-forwards a full cycle into seconds |
 | `-skip-to-end` | Start one second from the end of a 1m phase, to verify the completion path |
+| `-version` | Print the version and exit |
 
 ### Layout
 
@@ -253,6 +274,7 @@ internal/theme/      per-phase palettes and cross-fading
 internal/anim/       fixed-capacity particle pool, easing
 internal/store/      session log and the stats derived from it
 internal/notify/     macOS notification and sound, stubbed elsewhere
+internal/selfupdate/ --update: fetch, verify and swap the binary
 internal/ui/         Bubble Tea model, HUD layout, stats screen
 assets/sprites/      the art
 ```

@@ -486,14 +486,19 @@ func TestSteamOnlyDuringFocus(t *testing.T) {
 	m, _ := testModel(t, nil)
 	m.timer.Running = true
 
-	tick(m, time.Second)
+	// Tick at the real frame interval. One big jump would age every wisp past
+	// its lifetime in a single step and reap them all.
+	for i := 0; i < 20; i++ {
+		tick(m, frameInterval)
+	}
 	if m.steam.Count() == 0 {
 		t.Error("focus produced no steam")
 	}
 
-	press(m, "s") // move to a break
-	tick(m, time.Second)
-	tick(m, time.Second)
+	press(m, "s") // move to a break, which clears the pool
+	for i := 0; i < 40; i++ {
+		tick(m, frameInterval)
+	}
 	if m.steam.Count() != 0 {
 		t.Errorf("steam still running during a break: %d particles", m.steam.Count())
 	}
@@ -834,5 +839,54 @@ func TestTypingSpacesInATaskLabel(t *testing.T) {
 
 	if m.timer.Task != "vibe code pomo" {
 		t.Errorf("Task = %q, want %q", m.timer.Task, "vibe code pomo")
+	}
+}
+
+// The mascot should read as breathing, not panting. A period much under a few
+// seconds looks agitated on screen.
+func TestBreathingIsCalmInEveryPhase(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		phase   timer.Phase
+		running bool
+	}{
+		{"focus", timer.Focus, true},
+		{"short break", timer.ShortBreak, true},
+		{"long break", timer.LongBreak, true},
+		{"paused", timer.Focus, false},
+	} {
+		b := breathFor(tt.phase, tt.running)
+		if b.period < slowestBreath {
+			t.Errorf("%s breathes with a %.1fs period, want at least %.1fs",
+				tt.name, b.period, slowestBreath)
+		}
+		if b.bob <= 0 || b.squash <= 0 {
+			t.Errorf("%s has no idle motion (%+v); a frozen mascot reads as a hang", tt.name, b)
+		}
+	}
+}
+
+// Focus stays the briskest so it reads as alert rather than restful.
+func TestFocusBreathesFasterThanBreaks(t *testing.T) {
+	focus := breathFor(timer.Focus, true)
+	for _, p := range []timer.Phase{timer.ShortBreak, timer.LongBreak} {
+		if got := breathFor(p, true); focus.period >= got.period {
+			t.Errorf("focus period %.1fs is not brisker than %v's %.1fs", focus.period, p, got.period)
+		}
+	}
+}
+
+// Only focus gives off steam; a break should be still.
+func TestSteamIsFocusOnly(t *testing.T) {
+	if breathFor(timer.Focus, true).steamHz <= 0 {
+		t.Error("focus produces no steam")
+	}
+	for _, p := range []timer.Phase{timer.ShortBreak, timer.LongBreak} {
+		if got := breathFor(p, true).steamHz; got != 0 {
+			t.Errorf("%v emits steam at %v Hz, want none", p, got)
+		}
+	}
+	if breathFor(timer.Focus, false).steamHz != 0 {
+		t.Error("a paused timer still emits steam")
 	}
 }

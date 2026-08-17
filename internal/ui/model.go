@@ -442,10 +442,11 @@ func (m *Model) fullView(pal theme.Palette) string {
 
 	b := breathFor(m.timer.Phase, m.timer.Running)
 	osc := 2*anim.Pulse(m.elapsed, b.period) - 1
+	// A one-pixel bob is half a cell, which is exactly the motion half-blocks
+	// buy. Forcing the offset even quantised it to two-pixel jumps, and on
+	// negative values Go's &^ rounds away from zero, so the mascot lurched
+	// down twice as far as it rose.
 	bob := int(math.Round(b.bob * osc))
-	// Keep the blit on an even row: the sprite is drawn for a specific
-	// half-block pairing.
-	bob &^= 1
 
 	blitSquash(
 		band, m.tomato.Canvas,

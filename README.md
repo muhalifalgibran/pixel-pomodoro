@@ -216,10 +216,12 @@ layers composite on top of it: a dim all-`8`s **ghost** mask behind (the unlit
 segments of an LCD), a hue-matched **outline**, a vertical gradient **face**,
 and a **bevel** that lights the top edge of every stroke.
 
-> **The one rule when placing art:** blit on an *even* pixel row. Each cell packs
-> two vertical pixels into one `▀`, so an odd offset re-pairs every cell and
-> shreds a sprite drawn for a specific pairing. `layout()` enforces it and a test
-> guards it — this bug bit twice during development.
+> **On vertical offsets:** each cell packs two pixels into one `▀`, so shifting
+> a sprite by one pixel re-pairs every cell. In colour this is harmless and is
+> exactly how the mascot bobs by half a cell. It only matters for
+> `Canvas.Silhouette()`, the mono debug view, which collapses a two-colour cell
+> into a single `█` and so looks broken at an odd offset. Static layout still
+> lands on even rows to keep those debug renders comparable.
 
 ## Development
 

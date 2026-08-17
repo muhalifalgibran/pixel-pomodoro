@@ -130,20 +130,28 @@ type breath struct {
 	steamHz float64 // steam wisps emitted per second, 0 for none
 }
 
+// Periods are in the range of calm human breathing, roughly 10-20 a minute.
+// Focus stays the briskest of the three so it reads as alert, but the original
+// 1.4s worked out at about 43 breaths a minute, which looked panicked rather
+// than focused.
 func breathFor(p timer.Phase, running bool) breath {
 	if !running {
 		// Paused: a slow shallow pulse. Freezing entirely reads as a hang.
-		return breath{period: 3.2, bob: 0.6, squash: 0.012}
+		return breath{period: 5.0, bob: 0.6, squash: 0.012}
 	}
 	switch p {
 	case timer.ShortBreak:
-		return breath{period: 2.8, bob: 1.6, squash: 0.03}
+		return breath{period: 4.5, bob: 1.6, squash: 0.028}
 	case timer.LongBreak:
-		return breath{period: 4.0, bob: 2.0, squash: 0.035}
+		return breath{period: 5.5, bob: 2.0, squash: 0.03}
 	default:
-		return breath{period: 1.4, bob: 1.0, squash: 0.045, steamHz: 6}
+		return breath{period: 3.5, bob: 1.2, squash: 0.035, steamHz: 3}
 	}
 }
+
+// slowestBreath bounds how brisk any phase may be. A period under this reads
+// as agitated on screen, which is the opposite of what a focus timer is for.
+const slowestBreath = 3.0
 
 // applyScanlines dims every other pixel row for a CRT feel.
 func applyScanlines(c *canvas.Canvas) {

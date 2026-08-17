@@ -298,6 +298,13 @@ func helpHint(pal theme.Palette) []string {
 	return []string{helpInline(pal, []string{"/ keys"})}
 }
 
+// helpFits reports whether a key set would go on one line in the given width.
+// Used by the tests to state the intent in terms of the rule rather than of a
+// particular set's size.
+func helpFits(pal theme.Palette, parts []string, width int) bool {
+	return len(helpBlock(pal, parts, width)) == 1
+}
+
 // Key sets for each screen. Order matters: hints fill downward, so entries are
 // grouped in threes to make full columns rather than stranding a primary key in
 // a near-empty one.
@@ -323,20 +330,44 @@ var (
 	statsKeys       = []string{"t back", "esc back", "q quit"}
 )
 
-// helpInlineMax is the largest key set kept on one line. Up to this many hints
-// fit comfortably inside the frame, and stacking three items into a single
-// narrow column reads as a list rather than a legend. Past it the grid is
-// needed: that is what pushed the original legend wider than the frame.
-const helpInlineMax = 3
-
-// helpBlock lays the key hints out. Short sets stay on one line; longer ones
-// wrap into columns of helpRows so the block never runs wider than the HUD
-// frame above it.
-func helpBlock(pal theme.Palette, parts []string) []string {
-	if len(parts) <= helpInlineMax {
-		return []string{helpInline(pal, parts)}
+// helpBlock lays the key hints out on one line where they fit, and in columns
+// where they do not.
+//
+// Deciding on the measured width rather than on a hint count is what keeps a
+// legend from ever running past the space it has: a set that fits stays on one
+// line, and the same set falls back to the grid on a narrower terminal instead
+// of wrapping. width is the space available — the frame's width under the HUD,
+// the terminal's on a full-screen view. A width of zero means unknown, and
+// takes the grid as the safe choice.
+func helpBlock(pal theme.Palette, parts []string, width int) []string {
+	if len(parts) == 0 {
+		return []string{""}
 	}
-	return helpGrid(pal, parts)
+	if line := helpInline(pal, parts); width > 0 && lipgloss.Width(line) <= width {
+		return []string{line}
+	}
+	// helpRows is the preferred shape, but a cramped width needs a taller, and
+	// therefore narrower, grid. Growing rows until it fits keeps the promise
+	// that a legend never exceeds the space it was given.
+	for rows := helpRows; rows < len(parts); rows++ {
+		g := helpGrid(pal, parts, rows)
+		if width <= 0 || widest(g) <= width {
+			return g
+		}
+	}
+	// One column is as narrow as it gets.
+	return helpGrid(pal, parts, len(parts))
+}
+
+// widest is the display width of the longest row.
+func widest(rows []string) int {
+	w := 0
+	for _, r := range rows {
+		if n := lipgloss.Width(r); n > w {
+			w = n
+		}
+	}
+	return w
 }
 
 // helpInline renders a short key set as one line.
@@ -352,8 +383,8 @@ func helpInline(pal theme.Palette, parts []string) string {
 	return " " + strings.Join(out, faint.Render("  ·  "))
 }
 
-// helpGrid lays a longer key set out in columns, filling downward.
-func helpGrid(pal theme.Palette, parts []string) []string {
+// helpGrid lays a key set out in columns of rows, filling downward.
+func helpGrid(pal theme.Palette, parts []string, rows int) []string {
 	key := lipgloss.NewStyle().Foreground(lg(pal.Accent)).Bold(true)
 	faint := lipgloss.NewStyle().Foreground(lg(pal.TextDim))
 
@@ -365,10 +396,13 @@ func helpGrid(pal theme.Palette, parts []string) []string {
 		widths[i] = lipgloss.Width(rendered[i])
 	}
 
-	cols := (len(parts) + helpRows - 1) / helpRows
+	if rows < 1 {
+		rows = 1
+	}
+	cols := (len(parts) + rows - 1) / rows
 	colWidth := make([]int, cols)
 	for i, w := range widths {
-		if c := i / helpRows; w > colWidth[c] {
+		if c := i / rows; w > colWidth[c] {
 			colWidth[c] = w
 		}
 	}
@@ -384,12 +418,12 @@ func helpGrid(pal theme.Palette, parts []string) []string {
 		}
 	}
 
-	out := make([]string, helpRows)
-	for r := 0; r < helpRows; r++ {
+	out := make([]string, rows)
+	for r := 0; r < rows; r++ {
 		var b strings.Builder
 		b.WriteString(" ")
 		for c := 0; c < cols; c++ {
-			i := c*helpRows + r
+			i := c*rows + r
 			if i >= len(parts) {
 				break
 			}

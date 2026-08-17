@@ -845,10 +845,11 @@ func (m *Model) paletteTarget() theme.Palette {
 	return theme.For(m.timer.Phase)
 }
 
-// withLegend puts the three-row key grid under a screen's content.
-func withLegend(pal theme.Palette, body string, keys []string) string {
+// withLegend puts a screen's key hints under its content. Full-screen views are
+// measured against the terminal, since they have all of it to use.
+func withLegend(pal theme.Palette, body string, keys []string, width int) string {
 	return strings.TrimRight(body, "\n") + "\n\n" +
-		strings.Join(helpBlock(pal, keys), "\n")
+		strings.Join(helpBlock(pal, keys, width), "\n")
 }
 
 // statsWidth is the width the stats screen may use. Before the first
@@ -881,15 +882,15 @@ func (m *Model) View() string {
 	case modeStats:
 		return withLegend(pal,
 			StatsReport(pal, m.stats, m.habits.Active(), m.progress, m.store.Path(), m.statsWidth()),
-			statsKeys)
+			statsKeys, m.statsWidth())
 	case modeHabits:
 		return withLegend(pal,
 			habitsView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID),
-			habitsKeysFor(len(m.habits.Active()) > 0))
+			habitsKeysFor(len(m.habits.Active()) > 0), m.statsWidth())
 	case modeHabitForm:
-		return withLegend(pal, m.habitForm.view(pal), formKeys)
+		return withLegend(pal, m.habitForm.view(pal), formKeys, m.statsWidth())
 	case modeConfirm:
-		return withLegend(pal, m.confirm.view(pal), confirmKeys)
+		return withLegend(pal, m.confirm.view(pal), confirmKeys, m.statsWidth())
 	}
 	if m.width > 0 && (m.width < m.geom.BandW+2 || m.height < m.requiredHeight()) {
 		return compactView(pal, m.timer, m.clockText(), m.stats)

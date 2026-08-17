@@ -200,7 +200,7 @@ func TestFullViewSurvivesAnOverlongTask(t *testing.T) {
 }
 
 func TestHelpBlockIsAGridOfColumns(t *testing.T) {
-	rows := helpBlock(theme.Ember, timerKeys)
+	rows := helpBlock(theme.Ember, timerKeys, 60)
 
 	if len(rows) != helpRows {
 		t.Fatalf("helpBlock returned %d rows, want %d", len(rows), helpRows)
@@ -247,7 +247,7 @@ func TestEveryLegendFitsUnderTheFrame(t *testing.T) {
 		"stats":        statsKeys,
 	}
 	for name, keys := range sets {
-		for i, r := range helpBlock(theme.Ember, keys) {
+		for i, r := range helpBlock(theme.Ember, keys, frameWidth) {
 			if got := lipgloss.Width(r); got > frameWidth {
 				t.Errorf("%s legend row %d is %d cells wide, wider than the %d-cell frame",
 					name, i, got, frameWidth)
@@ -262,37 +262,67 @@ func TestEveryLegendFitsUnderTheFrame(t *testing.T) {
 	}
 }
 
-// Short sets stay on one line; only longer ones need the grid. Stacking two or
-// three hints into a narrow column reads as a list rather than a legend.
-func TestShortKeySetsStayOnOneLine(t *testing.T) {
-	short := map[string][]string{
+// A legend that fits its width goes on one line; the same set falls back to the
+// grid when the width will not take it. That is the whole rule.
+func TestLegendUsesOneLineWhenItFits(t *testing.T) {
+	pal := theme.Ember
+
+	for name, keys := range map[string][]string{
 		"editing":      editingKeys,
 		"habits empty": habitsEmptyKeys,
 		"form":         formKeys,
 		"confirm":      confirmKeys,
 		"stats":        statsKeys,
+		"habits":       habitsKeys,
+	} {
+		if !helpFits(pal, keys, 100) {
+			t.Errorf("%s legend does not fit one line at width 100", name)
+		}
 	}
-	for name, keys := range short {
-		if len(keys) > helpInlineMax {
-			t.Fatalf("%s has %d keys, which is not a short set", name, len(keys))
-		}
-		if got := len(helpBlock(theme.Ember, keys)); got != 1 {
-			t.Errorf("%s legend is %d rows, want 1", name, got)
-		}
+
+	// The timer legend is too long for one line even on a wide terminal, which
+	// is why the grid exists.
+	if helpFits(pal, timerKeys, 100) {
+		t.Error("the timer legend went on one line; it is wider than the frame it sits under")
 	}
 }
 
-func TestLongKeySetsUseTheGrid(t *testing.T) {
-	for name, keys := range map[string][]string{
-		"timer":  timerKeys,
-		"zen":    zenKeys,
-		"habits": habitsKeys,
-	} {
-		if len(keys) <= helpInlineMax {
-			t.Fatalf("%s has only %d keys", name, len(keys))
-		}
-		if got := len(helpBlock(theme.Ember, keys)); got != helpRows {
-			t.Errorf("%s legend is %d rows, want %d", name, got, helpRows)
+func TestLegendFallsBackToTheGridWhenTooNarrow(t *testing.T) {
+	pal := theme.Ember
+
+	// Habits fits a wide terminal but not a cramped one.
+	if !helpFits(pal, habitsKeys, 100) {
+		t.Fatal("habits should fit at width 100")
+	}
+	if helpFits(pal, habitsKeys, 30) {
+		t.Error("habits stayed on one line at width 30, which would wrap")
+	}
+	if got := len(helpBlock(pal, habitsKeys, 30)); got != helpRows {
+		t.Errorf("narrow habits legend is %d rows, want the %d-row grid", got, helpRows)
+	}
+}
+
+// An unknown width must not gamble on a line that might not fit.
+func TestUnknownWidthTakesTheGrid(t *testing.T) {
+	if got := len(helpBlock(theme.Ember, habitsKeys, 0)); got != helpRows {
+		t.Errorf("legend at unknown width is %d rows, want the grid", got)
+	}
+}
+
+// Whatever the layout, the legend never exceeds the width it was given.
+func TestLegendNeverExceedsItsWidth(t *testing.T) {
+	pal := theme.Ember
+	sets := [][]string{
+		timerKeys, zenKeys, editingKeys,
+		habitsKeys, habitsEmptyKeys, formKeys, confirmKeys, statsKeys,
+	}
+	for _, width := range []int{30, 40, 60, 80, 120} {
+		for _, keys := range sets {
+			for i, row := range helpBlock(pal, keys, width) {
+				if got := lipgloss.Width(row); got > width {
+					t.Errorf("at width %d, %v row %d is %d cells wide", width, keys, i, got)
+				}
+			}
 		}
 	}
 }
@@ -878,7 +908,7 @@ func TestLegendRowsWithinASetAreAligned(t *testing.T) {
 		timerKeys, zenKeys, editingKeys,
 		habitsKeys, habitsEmptyKeys, formKeys, confirmKeys, statsKeys,
 	} {
-		rows := helpBlock(theme.Ember, keys)
+		rows := helpBlock(theme.Ember, keys, 100)
 		want := lipgloss.Width(rows[0])
 		for i, r := range rows {
 			if got := lipgloss.Width(r); got != want {

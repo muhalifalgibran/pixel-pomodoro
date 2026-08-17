@@ -92,17 +92,21 @@ func (m *Model) hudView(pal theme.Palette) string {
 // While editing, the legend is shown regardless of the toggle: enter and esc
 // are not guessable, and being stuck in a text field is worse than a few extra
 // rows.
+// The HUD's legend is measured against the frame it sits under, not the
+// terminal: on a wide terminal a legend stretching well past the frame's right
+// edge reads as belonging to something else.
 func (m *Model) helpRowsFor(pal theme.Palette) []string {
+	width := m.geom.BandW + 2
 	if m.mode == modeEditTask {
-		return helpBlock(pal, editingKeys)
+		return helpBlock(pal, editingKeys, width)
 	}
 	if !m.showHelp {
 		return helpHint(pal)
 	}
 	if m.zen {
-		return helpBlock(pal, zenKeys)
+		return helpBlock(pal, zenKeys, width)
 	}
-	return helpBlock(pal, timerKeys)
+	return helpBlock(pal, timerKeys, width)
 }
 
 // requiredHeight is the rows the full HUD needs: two borders, the status bar,

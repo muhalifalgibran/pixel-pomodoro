@@ -91,14 +91,23 @@ Grab the archive for your machine from the
 ```sh
 tar -xzf pomo_*.tar.gz
 sudo mv pomo_*/pomo /usr/local/bin/pomo
+
+# macOS only: clear the download quarantine BEFORE the first run
+sudo xattr -c /usr/local/bin/pomo
+
 pomo
 ```
 
-On macOS, Gatekeeper blocks unsigned downloads the first time. Clear it with:
+The `xattr` line matters on macOS, and it has to come first. pomo is signed
+only ad-hoc, not notarized — that needs a paid Apple Developer account — so
+Gatekeeper stops an unsigned download the first time it runs. On macOS 15 and
+later the dialog it shows offers only **Move to Trash** and **Done**; there is
+no "Open Anyway" button any more. If you have already hit it, either run the
+`xattr` line and try again, or go to **System Settings → Privacy & Security**,
+scroll to the bottom and press **Open Anyway**.
 
-```sh
-xattr -d com.apple.quarantine /usr/local/bin/pomo
-```
+Nothing about this is specific to pomo — every unnotarized download behaves this
+way. Verify the checksum below if you would rather not take that on trust.
 
 Verify a download against the published checksums:
 
@@ -161,7 +170,8 @@ In the habit list: `j`/`k` move, `enter` starts the one under the cursor, `a`
 adds, `E` edits, `d` removes.
 
 In the checklist: `j`/`k` move, `space` ticks the one under the cursor off,
-`u` takes the last tick back, `enter` starts the timer on it instead.
+`u` takes back the ticks you made this run one at a time, `enter` starts the
+timer on it instead.
 
 ## Updating
 

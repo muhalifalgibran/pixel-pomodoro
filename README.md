@@ -235,9 +235,19 @@ TODAY  1 of 2 done
 
 `space` credits one session — the habit's own focus length, exactly what
 `pomo -log reading` records — so a "1 session a day" goal is done in one press,
-and a "4h a day" goal fills a session at a time rather than in one lie. `u`
-takes the last tick back, while it is still the newest thing in the log. `enter`
-starts the timer on that habit instead, for the ones you want to be made to do.
+and a "4h a day" goal fills a session at a time rather than in one lie. The last
+tick of a goal fills only what is left, so 25-minute sessions against a 90
+minute goal go 25, 50, 75, 90 rather than overshooting to 100, and a goal
+already met says so instead of quietly stacking another session on top.
+
+The key hint names the amount that press would credit — `space skip 25m`, then
+`space skip 15m` once only a quarter hour is left — because calling it "done"
+on a goal one press will not finish is what makes it read as a checkbox you
+should press again.
+
+`u` takes back the ticks you made this run, one session per press, all the way
+down. `enter` starts the timer on that habit instead, for the ones you want to
+be made to do.
 
 A tick is an ordinary session in the log. Nothing downstream can tell it apart
 from timed work, which is why the streaks and bars keep adding up.
@@ -317,11 +327,13 @@ therefore keeps every session it earned. Lines written before habits existed
 carry only `task`, and are matched against habit names when read — nothing on
 disk is ever rewritten.
 
-The log is append-only with exactly one exception: `u` on the checklist
-truncates the tick you just made, and only while that tick is still the last
-line in the file. If anything else has landed since — a finished phase, a
-`pomo -log` from another terminal — it refuses rather than guess. Nothing
-before that line is ever read or rewritten, so history cannot be lost to it.
+The log is append-only with exactly one exception: `u` on the checklist removes
+a tick you made in this run of pomo. It matches the line byte for byte, so it
+can only ever take back its own entry — a finished phase, a break, a `pomo -log`
+from another terminal are all left exactly where they are, and a tick from a
+previous run is history rather than a stack. Every other line is copied through
+untouched, including any pomo could not parse, and the replacement lands by
+rename, so a crash leaves either the old file or the new one.
 
 XP, level and streak are **derived by replaying that log** at launch. Nothing
 caches them, so the numbers cannot drift out of sync with the sessions that

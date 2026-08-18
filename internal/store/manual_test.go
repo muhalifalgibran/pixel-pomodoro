@@ -76,35 +76,26 @@ func TestManualSessionRecordsACompletedFocus(t *testing.T) {
 	}
 }
 
-// markAt appends sess and hands back the offset it started at, the way the
-// checklist does before it lets you undo.
-func markAt(t *testing.T, s *Store, sess Session) int64 {
-	t.Helper()
-	at, err := s.Size()
-	if err != nil {
-		t.Fatalf("Size() error = %v", err)
-	}
-	if err := s.Append(sess); err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
-	return at
-}
-
-func TestRemoveLastDropsOnlyTheFinalLine(t *testing.T) {
+func TestRemoveDropsOnlyThatLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.jsonl")
 	s := New(path)
 
-	markAt(t, s, focus(16, 9, 25))
-	markAt(t, s, focus(16, 10, 25))
+	for _, sess := range []Session{focus(16, 9, 25), focus(16, 10, 25)} {
+		if err := s.Append(sess); err != nil {
+			t.Fatal(err)
+		}
+	}
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	last := focus(16, 11, 50)
-	at := markAt(t, s, last)
-	if err := s.RemoveLast(at, last); err != nil {
-		t.Fatalf("RemoveLast() error = %v", err)
+	mine := focus(16, 11, 50)
+	if err := s.Append(mine); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(mine); err != nil {
+		t.Fatalf("Remove() error = %v", err)
 	}
 
 	after, err := os.ReadFile(path)
@@ -112,43 +103,70 @@ func TestRemoveLastDropsOnlyTheFinalLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(after) != string(before) {
-		t.Errorf("log after undo:\n%s\nwant it back to:\n%s", after, before)
-	}
-	got, _, err := s.Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if len(got) != 2 {
-		t.Errorf("loaded %d sessions, want 2", len(got))
+		t.Errorf("log after remove:\n%s\nwant it back to:\n%s", after, before)
 	}
 }
 
-func TestRemoveLastRefusesWhenTheLogMovedOn(t *testing.T) {
+// The point of rewriting rather than truncating: a session landing on top must
+// not put the tick beyond reach.
+func TestRemoveReachesPastALaterSession(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.jsonl")
 	s := New(path)
 
 	mine := focus(16, 9, 25)
-	at := markAt(t, s, mine)
-	// Another pomo, or `pomo -log`, lands in between.
-	if err := s.Append(focus(16, 10, 25)); err != nil {
-		t.Fatal(err)
+	later := focus(16, 10, 50)
+	for _, sess := range []Session{mine, later} {
+		if err := s.Append(sess); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	if err := s.RemoveLast(at, mine); !errors.Is(err, ErrLogMoved) {
-		t.Fatalf("RemoveLast() error = %v, want ErrLogMoved", err)
+	if err := s.Remove(mine); err != nil {
+		t.Fatalf("Remove() error = %v", err)
 	}
+
 	got, _, err := s.Load()
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Errorf("loaded %d sessions, want both left alone", len(got))
+	if len(got) != 1 {
+		t.Fatalf("loaded %d sessions, want 1", len(got))
+	}
+	if got[0].Mins != 50 {
+		t.Errorf("kept the %dm session, want the later 50m one to survive", got[0].Mins)
 	}
 }
 
-// Load skips unparseable lines on purpose, so an undo that rebuilt the file
-// from what Load returned would silently delete them. Truncating cannot.
-func TestRemoveLastKeepsUnreadableLines(t *testing.T) {
+func TestRemoveRefusesWhatItCannotFind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.jsonl")
+	s := New(path)
+
+	if err := s.Remove(focus(16, 9, 25)); !errors.Is(err, ErrNotInLog) {
+		t.Fatalf("Remove() on an empty log = %v, want ErrNotInLog", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("Remove created the log file")
+	}
+
+	if err := s.Append(focus(16, 9, 25)); err != nil {
+		t.Fatal(err)
+	}
+	// Same shape, different minutes — not our line.
+	if err := s.Remove(focus(16, 9, 26)); !errors.Is(err, ErrNotInLog) {
+		t.Fatalf("Remove() of a session never written = %v, want ErrNotInLog", err)
+	}
+	got, _, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Errorf("loaded %d sessions, want the untouched one", len(got))
+	}
+}
+
+// Load skips unparseable lines on purpose, so a remove that rebuilt the file
+// from what Load returned would silently delete them.
+func TestRemoveKeepsUnreadableLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.jsonl")
 	s := New(path)
 
@@ -165,9 +183,11 @@ func TestRemoveLastKeepsUnreadableLines(t *testing.T) {
 	f.Close()
 
 	mine := focus(16, 10, 50)
-	at := markAt(t, s, mine)
-	if err := s.RemoveLast(at, mine); err != nil {
-		t.Fatalf("RemoveLast() error = %v", err)
+	if err := s.Append(mine); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(mine); err != nil {
+		t.Fatalf("Remove() error = %v", err)
 	}
 
 	raw, err := os.ReadFile(path)
@@ -175,25 +195,38 @@ func TestRemoveLastKeepsUnreadableLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), "this line is not json") {
-		t.Errorf("undo ate the unparseable line:\n%s", raw)
+		t.Errorf("remove ate the unparseable line:\n%s", raw)
 	}
 	got, skipped, err := s.Load()
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatal(err)
 	}
 	if len(got) != 1 || skipped != 1 {
 		t.Errorf("loaded %d sessions and skipped %d, want 1 and 1", len(got), skipped)
 	}
 }
 
-func TestRemoveLastOnAnEmptyLog(t *testing.T) {
+// Identical presses produce identical lines; removing the newest keeps undo in
+// the order the presses happened.
+func TestRemoveTakesTheLastOfIdenticalLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.jsonl")
 	s := New(path)
 
-	if err := s.RemoveLast(0, focus(16, 9, 25)); !errors.Is(err, ErrLogMoved) {
-		t.Fatalf("RemoveLast() error = %v, want ErrLogMoved", err)
+	twin := focus(16, 9, 25)
+	for i := 0; i < 3; i++ {
+		if err := s.Append(twin); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("undo created the log file")
+	if err := s.Remove(twin); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+
+	got, _, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("loaded %d sessions, want 2", len(got))
 	}
 }

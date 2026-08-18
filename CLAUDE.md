@@ -58,11 +58,13 @@ Consequences worth internalising before changing anything in `internal/store`:
 - **`Session.Done` does not mean "habit complete."** It means the phase ran to
   its end rather than being skipped. Habit completion is derived:
   `p.Met = p.Value >= h.Goal.Target` (`internal/store/progress.go`).
-- The log is append-only with **one** exception: `Store.RemoveLast` truncates
-  back to a recorded byte offset, and only while the tail still byte-matches the
-  session being removed. Do not rebuild the file from `Load()` — `Load` skips
-  unparseable lines on purpose, so writing back what it returned would silently
-  delete damaged-but-present history.
+- The log is append-only with **one** exception: `Store.Remove` drops a line
+  that is byte-identical to the session handed to it, wherever it now sits, via
+  a raw-line rewrite and an atomic rename. Byte matching is the safety property
+  — a caller can only take back its own append. **Do not rebuild the file from
+  `Load()`** — `Load` skips unparseable lines on purpose, so writing back what
+  it returned would silently delete damaged-but-present history. `Remove`
+  therefore works on raw lines, and a test pins that.
 
 ### Time is always injected, never read
 

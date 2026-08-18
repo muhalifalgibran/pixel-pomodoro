@@ -95,11 +95,10 @@ type Model struct {
 	// sessions is the replayed log, kept in memory so stats can be
 	// recomputed after each append without re-reading the file.
 	sessions []store.Session
-	// lastMark is the check-off that [u] would take back, and is non-nil only
-	// while it is still the newest thing this process appended. Holding it in
-	// memory is what scopes undo to this run: a mis-press is worth taking back,
-	// a week-old entry is history.
-	lastMark *checkMark
+	// marks is the stack of check-offs [u] can take back, newest last. It lives
+	// in memory only, which is what scopes undo to this run: a mis-press is
+	// worth taking back, a week-old entry is history.
+	marks []store.Session
 	// checkStatus is the check-off screen's feedback line — what was logged, or
 	// why an undo was refused.
 	checkStatus string
@@ -573,13 +572,6 @@ func (m *Model) habitsKey(msg tea.KeyMsg) {
 	}
 }
 
-// checkMark is a check-off that can still be taken back: the exact session that
-// was appended, and the byte the log stood at beforehand.
-type checkMark struct {
-	sess store.Session
-	at   int64
-}
-
 // checkKey drives the [l] screen. It shares habitCursor with the habit list —
 // both index the same slice, so moving between the two screens keeps your place.
 func (m *Model) checkKey(msg tea.KeyMsg) {
@@ -622,54 +614,91 @@ func (m *Model) checkKey(msg tea.KeyMsg) {
 // the active one: a mark asserts something about the past, and resetting the
 // clock over it would throw away real elapsed time.
 func (m *Model) markDone(h habit.Habit) {
-	dur := store.SessionLength(h, m.cfg.Focus)
+	dur := m.checkAmount(h)
+	if dur <= 0 {
+		m.checkStatus = h.Name + " is already done — u takes a session back"
+		return
+	}
 	sess, err := store.ManualSession(h, dur, time.Now())
 	if err != nil {
 		m.checkStatus = err.Error()
 		return
 	}
 
-	// Taken before the append, so undo knows where the log stood.
-	at, err := m.store.Size()
-	if err != nil {
-		at = -1
-	}
-
 	met := m.progress[h.ID].Met
 	m.appendSession(sess)
-	if at >= 0 {
-		m.lastMark = &checkMark{sess: sess, at: at}
-	}
+	m.marks = append(m.marks, sess)
 
-	m.checkStatus = fmt.Sprintf("logged %s to %s — u to undo", habit.FormatMinutes(sess.Mins), h.Name)
+	m.checkStatus = fmt.Sprintf("skipped %s of %s — u to undo", habit.FormatMinutes(sess.Mins), h.Name)
 	if !met && m.progress[h.ID].Met {
 		m.checkStatus = h.Name + " — goal met"
 	}
 }
 
-// undoMark takes back the last check-off, and only that one. It refuses rather
-// than guesses if anything else has landed in the log since, so a session
-// another pomo wrote can never be the thing that disappears.
+// checkAmount is how long one press of space would credit h with: a session at
+// the habit's own length, clamped so a time goal lands exactly on its target
+// instead of overshooting it. A 90m goal ticked at 25m a time therefore goes
+// 25, 50, 75, 90 rather than 100.
+//
+// Zero means there is nothing left to fill, which is also what stops a met
+// habit quietly stacking sessions every time space is pressed.
+func (m *Model) checkAmount(h habit.Habit) time.Duration {
+	p := m.progress[h.ID]
+	if p.Met {
+		return 0
+	}
+	dur := store.SessionLength(h, m.cfg.Focus)
+	// A session count cannot be part-filled, so only a time goal is clamped.
+	if h.Goal.Unit == habit.Minutes {
+		if left := time.Duration(p.Target-p.Value) * time.Minute; left > 0 && left < dur {
+			dur = left
+		}
+	}
+	return dur
+}
+
+// undoMark takes back the newest check-off still on the stack, one press per
+// session, so a goal ticked up in several presses walks back down the same way.
+//
+// A finished phase or a break landing in between does not disarm it: the store
+// removes the tick's own line wherever it now sits, so only what this run
+// pressed is ever removed, and never a session the timer really ran.
 func (m *Model) undoMark() {
-	if m.lastMark == nil {
+	if len(m.marks) == 0 {
 		m.checkStatus = "nothing to undo"
 		return
 	}
-	if err := m.store.RemoveLast(m.lastMark.at, m.lastMark.sess); err != nil {
-		m.lastMark = nil
+
+	mark := m.marks[len(m.marks)-1]
+	if err := m.store.Remove(mark); err != nil {
+		// The line is gone from under us — a hand edit, or another pomo
+		// rewriting the log. Drop the stack rather than guess at what is left.
+		m.marks = nil
 		m.checkStatus = "the log has moved on — that one stays"
 		return
 	}
+	m.marks = m.marks[:len(m.marks)-1]
+	m.sessions = dropSession(m.sessions, mark)
 
-	name := m.lastMark.sess.Task
-	m.lastMark = nil
-	if n := len(m.sessions); n > 0 {
-		m.sessions = m.sessions[:n-1]
-	}
 	now := time.Now()
 	m.stats = store.Compute(m.sessions, now)
 	m.refreshProgress(now)
-	m.checkStatus = "took back the last " + name
+	m.checkStatus = fmt.Sprintf("took back %s of %s",
+		habit.FormatMinutes(mark.Mins), mark.Task)
+}
+
+// dropSession removes the newest copy of sess from the in-memory log, matching
+// the store's own rule. Position is not enough: a phase can land after a tick,
+// so the tick being undone is not necessarily the last one in the slice.
+func dropSession(sessions []store.Session, sess store.Session) []store.Session {
+	for i := len(sessions) - 1; i >= 0; i-- {
+		s := sessions[i]
+		if s.Mins == sess.Mins && s.Habit == sess.Habit && s.Task == sess.Task &&
+			s.Phase == sess.Phase && s.Done == sess.Done && s.Start.Equal(sess.Start) {
+			return append(sessions[:i], sessions[i+1:]...)
+		}
+	}
+	return sessions
 }
 
 func (m *Model) formKey(msg tea.KeyMsg) {
@@ -906,9 +935,6 @@ func (m *Model) saveResume() {
 // can be updated without the others.
 func (m *Model) appendSession(sess store.Session) {
 	now := time.Now()
-	// Undo only ever reaches the newest append, so a phase or a zen stretch
-	// landing on top disarms it. markDone re-arms it straight after.
-	m.lastMark = nil
 	m.sessions = append(m.sessions, sess)
 	m.stats = store.Compute(m.sessions, now)
 	m.refreshProgress(now)
@@ -1023,9 +1049,14 @@ func (m *Model) View() string {
 			habitsView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID),
 			habitsKeysFor(len(m.habits.Active()) > 0), m.statsWidth())
 	case modeCheck:
+		active := m.habits.Active()
+		var next time.Duration
+		if m.habitCursor < len(active) {
+			next = m.checkAmount(active[m.habitCursor])
+		}
 		return withLegend(pal,
-			checkView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID, m.checkStatus),
-			checkKeysFor(len(m.habits.Active()) > 0), m.statsWidth())
+			checkView(pal, active, m.progress, m.habitCursor, m.activeID, m.checkStatus),
+			checkKeysFor(len(active) > 0, next), m.statsWidth())
 	case modeHabitForm:
 		return withLegend(pal, m.habitForm.view(pal), formKeys, m.statsWidth())
 	case modeConfirm:

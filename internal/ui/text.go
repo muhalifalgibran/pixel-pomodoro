@@ -331,8 +331,10 @@ var (
 		"j/k move", "enter start", "a add",
 		"E edit", "d delete", "esc back",
 	}
+	// The space entry is rewritten per row by checkKeysFor to name the amount
+	// that press would credit; checkSpaceKey is where it sits.
 	checkKeys = []string{
-		"j/k move", "space done", "u undo",
+		"j/k move", "space skip 25m", "u undo",
 		"enter start", "esc back", "q quit",
 	}
 	checkEmptyKeys  = []string{"h habits", "esc back"}

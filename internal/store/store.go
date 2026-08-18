@@ -81,66 +81,82 @@ func (s *Store) Append(sess Session) error {
 	return nil
 }
 
-// ErrLogMoved reports that the end of the log is no longer the line the caller
-// meant to take back.
-var ErrLogMoved = errors.New("the log has moved on")
+// ErrNotInLog reports that the session the caller wanted to take back is no
+// longer in the log, so there is nothing to remove.
+var ErrNotInLog = errors.New("that session is no longer in the log")
 
-// Size is the log's current length in bytes. A caller that wants to be able to
-// undo its next append records this first.
-func (s *Store) Size() (int64, error) {
-	fi, err := os.Stat(s.path)
-	if os.IsNotExist(err) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("measure session log: %w", err)
-	}
-	return fi.Size(), nil
-}
-
-// RemoveLast truncates the log back to at, but only while everything after at
-// is still exactly the line sess wrote. Anything else — a second pomo appending
-// through `pomo -log`, a hand edit — leaves the file alone and returns
-// ErrLogMoved.
+// Remove drops the line sess wrote, wherever it now sits. Only a line that is
+// still byte-for-byte what sess encoded to is touched, so a caller can only
+// ever take back its own append and never somebody else's.
 //
-// Truncating rather than rebuilding the file is what keeps the append-only
-// promise intact: every byte before at is never read, never re-encoded and
-// never at risk. Rebuilding from Load would be the trap, since Load drops
-// unparseable lines on purpose (see below) and writing back what it returned
-// would quietly delete a user's damaged-but-present history.
-func (s *Store) RemoveLast(at int64, sess Session) error {
-	line, err := encodeSession(sess)
+// This is the one operation that rewrites the file. It works on the raw lines
+// rather than on what Load returned, because Load drops unparseable lines on
+// purpose (see below) and rebuilding from it would quietly delete a user's
+// damaged-but-present history. Every other line is copied through untouched,
+// and the replacement lands by rename, so a crash leaves either the old file
+// or the new one and never a half-written log.
+//
+// It removes the last match rather than the first: identical lines can only
+// come from identical appends, and taking the newest keeps undo in the order
+// the presses happened.
+func (s *Store) Remove(sess Session) error {
+	target, err := encodeSession(sess)
 	if err != nil {
 		return err
 	}
+	target = bytes.TrimRight(target, "\n")
 
-	f, err := os.OpenFile(s.path, os.O_RDWR, 0o644)
+	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
-		return ErrLogMoved
+		return ErrNotInLog
 	}
 	if err != nil {
-		return fmt.Errorf("open session log: %w", err)
-	}
-	defer f.Close()
-
-	fi, err := f.Stat()
-	if err != nil {
-		return fmt.Errorf("measure session log: %w", err)
-	}
-	if fi.Size() != at+int64(len(line)) {
-		return ErrLogMoved
-	}
-
-	tail := make([]byte, len(line))
-	if _, err := f.ReadAt(tail, at); err != nil {
 		return fmt.Errorf("read session log: %w", err)
 	}
-	if !bytes.Equal(tail, line) {
-		return ErrLogMoved
+
+	// SplitAfter keeps the newline on each piece, so every other line is
+	// written back exactly as it was found.
+	lines := bytes.SplitAfter(data, []byte("\n"))
+	at := -1
+	for i, line := range lines {
+		trimmed := bytes.TrimRight(line, "\n")
+		if len(trimmed) > 0 && bytes.Equal(trimmed, target) {
+			at = i
+		}
+	}
+	if at < 0 {
+		return ErrNotInLog
 	}
 
-	if err := f.Truncate(at); err != nil {
-		return fmt.Errorf("truncate session log: %w", err)
+	kept := make([]byte, 0, len(data)-len(target))
+	for i, line := range lines {
+		if i == at {
+			continue
+		}
+		kept = append(kept, line...)
+	}
+	return s.replace(kept)
+}
+
+// replace swaps the log's contents atomically.
+func (s *Store) replace(data []byte) error {
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".sessions-*.jsonl")
+	if err != nil {
+		return fmt.Errorf("create temporary session log: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write session log: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close session log: %w", err)
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		return fmt.Errorf("replace session log: %w", err)
 	}
 	return nil
 }

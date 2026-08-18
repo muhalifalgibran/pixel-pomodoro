@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -25,6 +26,9 @@ const (
 	checkProgWidth = 18
 	checkMeterWide = 10
 )
+
+// checkSpaceKey is the index of the space hint inside checkKeys.
+const checkSpaceKey = 1
 
 // TodayReport renders the check-off list without a cursor, for `pomo -today`.
 // It is the same rows the [l] screen shows, so the two can never drift.
@@ -77,11 +81,23 @@ func metCount(habits []habit.Habit, progress map[string]store.HabitProgress) int
 
 // checkKeysFor picks the screen's key set. The ticking keys are suppressed when
 // there is nothing to tick.
-func checkKeysFor(any bool) []string {
+//
+// The space hint names the amount that press would actually credit rather than
+// saying "done": pressing it on a four-hour goal skips one session, not the
+// goal, and calling that "done" is what made it read as a checkbox you could
+// press twice. next is zero when the goal is already met.
+func checkKeysFor(any bool, next time.Duration) []string {
 	if !any {
 		return checkEmptyKeys
 	}
-	return checkKeys
+	space := "space all done"
+	if mins := int(next.Round(time.Minute) / time.Minute); mins > 0 {
+		space = "space skip " + habit.FormatMinutes(mins)
+	}
+	keys := make([]string, len(checkKeys))
+	copy(keys, checkKeys)
+	keys[checkSpaceKey] = space
+	return keys
 }
 
 // checkRow renders one line of the check-off list.

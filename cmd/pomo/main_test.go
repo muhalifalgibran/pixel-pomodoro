@@ -211,3 +211,25 @@ func TestPrintTodayReportsTheChecklist(t *testing.T) {
 		}
 	}
 }
+
+// -log is work really done away from the terminal, so it earns XP as a timed
+// session would. Only a checklist skip does not.
+func TestLogSessionIsMarkedAsLoggedNotSkipped(t *testing.T) {
+	cfg, st, hs := logFixture(t)
+	var out bytes.Buffer
+
+	if err := logSession(&out, cfg, st, hs, []string{"work", "90m"}, "", now()); err != nil {
+		t.Fatalf("logSession() error = %v", err)
+	}
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Manual != store.ManualLogged {
+		t.Errorf("Manual = %q, want %q", sessions[0].Manual, store.ManualLogged)
+	}
+	if !sessions[0].EarnsXP() {
+		t.Error("-log should earn XP; the time was really spent")
+	}
+}

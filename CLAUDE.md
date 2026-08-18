@@ -55,6 +55,12 @@ Consequences worth internalising before changing anything in `internal/store`:
   a total, recompute it instead.
 - `Session.IsWork()` (`Done && Mins > 0 && (phase == focus || zen)`) gates every
   figure. Breaks and skipped phases are filtered out everywhere.
+- `Session.Manual` records that pomo did not time a session: `ManualLogged`
+  (`pomo -log`) or `ManualSkipped` (space on the checklist), empty for timed
+  work. It is `omitempty`, so pre-existing lines stay valid and a timed session
+  writes no extra bytes. `Session.EarnsXP()` is `IsWork() && Manual != skipped`
+  — **skipped time moves goals, streaks and bars but never XP or level.** Reach
+  for `EarnsXP` only for XP; everything else uses `IsWork`.
 - **`Session.Done` does not mean "habit complete."** It means the phase ran to
   its end rather than being skipped. Habit completion is derived:
   `p.Met = p.Value >= h.Goal.Target` (`internal/store/progress.go`).

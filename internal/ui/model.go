@@ -619,7 +619,7 @@ func (m *Model) markDone(h habit.Habit) {
 		m.checkStatus = h.Name + " is already done — u takes a session back"
 		return
 	}
-	sess, err := store.ManualSession(h, dur, time.Now())
+	sess, err := store.ManualSession(h, dur, time.Now(), store.ManualSkipped)
 	if err != nil {
 		m.checkStatus = err.Error()
 		return

@@ -21,10 +21,10 @@ func SessionLength(h habit.Habit, fallback time.Duration) time.Duration {
 // that came from `pomo -log` or from ticking the habit off on the [l] screen.
 //
 // Both go through here so the two can never disagree about what a manual "done"
-// records. It is an ordinary completed focus phase: nothing about the log
-// distinguishes work you timed from work you told pomo about afterwards, which
-// is what lets every derived figure stay a plain replay of the log.
-func ManualSession(h habit.Habit, dur time.Duration, when time.Time) (Session, error) {
+// records. source says which of them it was — see ManualLogged and
+// ManualSkipped — because the two mean different things: one is time really
+// spent, the other is a goal moved without a clock running.
+func ManualSession(h habit.Habit, dur time.Duration, when time.Time, source string) (Session, error) {
 	if dur <= 0 {
 		return Session{}, fmt.Errorf("duration must be more than zero")
 	}
@@ -33,11 +33,12 @@ func ManualSession(h habit.Habit, dur time.Duration, when time.Time) (Session, e
 		return Session{}, fmt.Errorf("that rounds to no minutes at all")
 	}
 	return Session{
-		Start: when,
-		Mins:  mins,
-		Habit: h.ID,
-		Task:  h.Name,
-		Phase: PhaseFocus,
-		Done:  true,
+		Start:  when,
+		Mins:   mins,
+		Habit:  h.ID,
+		Task:   h.Name,
+		Phase:  PhaseFocus,
+		Done:   true,
+		Manual: source,
 	}, nil
 }

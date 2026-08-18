@@ -2668,3 +2668,58 @@ func TestProgressRecomputesWhenTheDayTurnsOver(t *testing.T) {
 		t.Error("the streak was lost along with the day")
 	}
 }
+
+// The whole point of the manual field: a press of space moves the goal but
+// cannot raise the level, while a timed phase does both.
+func TestSkippingMovesTheGoalButEarnsNoXP(t *testing.T) {
+	m, st, _ := habitModel(t, minutesHabit("work", 240))
+	sizeTo(m, 100, 40)
+
+	press(m, "l")
+	tickOff(m)
+
+	if got := m.progress["work"].Value; got != 25 {
+		t.Errorf("goal value = %d, want the skip to count as 25", got)
+	}
+	if m.stats.XP != 0 {
+		t.Errorf("XP = %d, want a skip to earn none", m.stats.XP)
+	}
+	if m.stats.SkippedTodayMins != 25 {
+		t.Errorf("SkippedTodayMins = %d, want 25", m.stats.SkippedTodayMins)
+	}
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Manual != store.ManualSkipped {
+		t.Errorf("logged Manual = %q, want %q", sessions[0].Manual, store.ManualSkipped)
+	}
+
+	// A real phase on top earns its XP as usual.
+	press(m, "esc")
+	press(m, "h")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	tick(m, 26*time.Minute)
+
+	if m.stats.XP != 25 {
+		t.Errorf("XP = %d, want only the timed phase's 25", m.stats.XP)
+	}
+	if m.progress["work"].Value != 50 {
+		t.Errorf("goal value = %d, want both to count", m.progress["work"].Value)
+	}
+}
+
+func TestStatsScreenNamesTheSkippedShare(t *testing.T) {
+	m, _, _ := habitModel(t, minutesHabit("work", 240))
+	sizeTo(m, 100, 40)
+
+	press(m, "l")
+	tickOff(m)
+	press(m, "esc")
+	press(m, "t")
+
+	if out := m.View(); !strings.Contains(out, "skipped") {
+		t.Errorf("stats screen does not say how much was skipped:\n%s", out)
+	}
+}

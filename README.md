@@ -249,8 +249,10 @@ should press again.
 down. `enter` starts the timer on that habit instead, for the ones you want to
 be made to do.
 
-A tick is an ordinary session in the log. Nothing downstream can tell it apart
-from timed work, which is why the streaks and bars keep adding up.
+A tick is an ordinary session in the log, marked `"manual":"skipped"`. It counts
+toward the goal, the streak and the bar exactly as timed work does — but it
+earns no XP, so the level stays a record of time you actually sat through. See
+[Progress](#progress).
 
 ### Streaks and the contribution bar
 
@@ -320,7 +322,14 @@ Finished sessions are appended to `$XDG_DATA_HOME/pomo/sessions.jsonl`
 
 ```json
 {"start":"2026-08-16T09:00:00Z","mins":25,"habit":"work","task":"work","phase":"focus","done":true}
+{"start":"2026-08-16T14:00:00Z","mins":90,"habit":"work","task":"work","phase":"focus","done":true,"manual":"logged"}
+{"start":"2026-08-16T21:00:00Z","mins":25,"habit":"work","task":"work","phase":"focus","done":true,"manual":"skipped"}
 ```
+
+`manual` says pomo did not time the session itself. `logged` is `pomo -log` —
+work really done away from the terminal. `skipped` is a press of space on the
+checklist. No field at all means the timer ran it, so every line written before
+the field existed still reads correctly.
 
 `habit` is a stable ID assigned when the habit is created. Renaming a habit
 therefore keeps every session it earned. Lines written before habits existed
@@ -334,6 +343,17 @@ from another terminal are all left exactly where they are, and a tick from a
 previous run is history rather than a stack. Every other line is copied through
 untouched, including any pomo could not parse, and the replacement lands by
 rename, so a crash leaves either the old file or the new one.
+
+**Skipped time moves goals but never the level.** A press of space counts toward
+the habit's goal, its streak and its contribution bar — you did the habit, and a
+tracker that pretended otherwise would be useless. It earns no XP, because a
+level you can raise by holding down a key is not worth having. `pomo -log` does
+earn XP: that time was genuinely spent, pomo just was not watching. `-stats`
+names the difference, so you can always see how much of a day you sat through:
+
+```
+  Today     3 sessions, 1h 55m  (25m skipped)
+```
 
 XP, level and streak are **derived by replaying that log** at launch. Nothing
 caches them, so the numbers cannot drift out of sync with the sessions that

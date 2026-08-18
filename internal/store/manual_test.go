@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -50,7 +51,7 @@ func TestManualSessionRecordsACompletedFocus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sess, err := ManualSession(h, tt.dur, when)
+			sess, err := ManualSession(h, tt.dur, when, ManualLogged)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("error = %v, want it to mention %q", err, tt.wantErr)
@@ -228,5 +229,110 @@ func TestRemoveTakesTheLastOfIdenticalLines(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("loaded %d sessions, want 2", len(got))
+	}
+}
+
+func TestManualSessionCarriesItsSource(t *testing.T) {
+	h := habit.Habit{ID: "h1", Name: "work"}
+	for _, source := range []string{ManualLogged, ManualSkipped} {
+		t.Run(source, func(t *testing.T) {
+			sess, err := ManualSession(h, 25*time.Minute, at(18, 9), source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sess.Manual != source {
+				t.Errorf("Manual = %q, want %q", sess.Manual, source)
+			}
+			if !sess.IsWork() {
+				t.Error("a manual session should still count as work")
+			}
+		})
+	}
+}
+
+// Skipped time moves goals and bars but must never raise the level, or the
+// level becomes a count of keypresses.
+func TestOnlySkippedTimeIsLeftOutOfXP(t *testing.T) {
+	timed := focus(18, 9, 25)
+	logged := focus(18, 10, 25)
+	logged.Manual = ManualLogged
+	skipped := focus(18, 11, 25)
+	skipped.Manual = ManualSkipped
+
+	tests := []struct {
+		name    string
+		sess    Session
+		earns   bool
+		wantXP  int
+		wantDay int
+	}{
+		{"a timed phase", timed, true, 25, 25},
+		{"pomo -log", logged, true, 25, 25},
+		{"a checklist skip", skipped, false, 0, 25},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sess.EarnsXP(); got != tt.earns {
+				t.Errorf("EarnsXP() = %v, want %v", got, tt.earns)
+			}
+			st := Compute([]Session{tt.sess}, at(18, 23))
+			if st.XP != tt.wantXP {
+				t.Errorf("XP = %d, want %d", st.XP, tt.wantXP)
+			}
+			// Whatever XP does, the day's minutes are unchanged: the habit's
+			// goal and its bar count every kind.
+			if st.TodayMins != tt.wantDay {
+				t.Errorf("TodayMins = %d, want %d", st.TodayMins, tt.wantDay)
+			}
+			if st.Streak != 1 {
+				t.Errorf("Streak = %d, want the day to still count", st.Streak)
+			}
+		})
+	}
+}
+
+func TestSkippedMinutesAreReportedSeparately(t *testing.T) {
+	skipped := focus(18, 9, 25)
+	skipped.Manual = ManualSkipped
+	st := Compute([]Session{focus(18, 8, 50), skipped}, at(18, 23))
+
+	if st.TodayMins != 75 {
+		t.Errorf("TodayMins = %d, want 75", st.TodayMins)
+	}
+	if st.SkippedTodayMins != 25 {
+		t.Errorf("SkippedTodayMins = %d, want 25", st.SkippedTodayMins)
+	}
+	if st.SkippedWeekMins != 25 {
+		t.Errorf("SkippedWeekMins = %d, want 25", st.SkippedWeekMins)
+	}
+	if st.XP != 50 {
+		t.Errorf("XP = %d, want only the 50m that was timed", st.XP)
+	}
+}
+
+// Lines written before the field existed have no Manual, and must keep every
+// bit of the XP they already earned.
+func TestSessionsWithoutTheFieldStillEarnXP(t *testing.T) {
+	var sess Session
+	if err := json.Unmarshal(
+		[]byte(`{"start":"2026-08-18T09:00:00Z","mins":25,"phase":"focus","done":true}`), &sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Manual != "" {
+		t.Errorf("Manual = %q, want empty for an old line", sess.Manual)
+	}
+	if !sess.EarnsXP() {
+		t.Error("an old line stopped earning XP")
+	}
+}
+
+// A timed session carries no extra bytes, so existing logs round-trip unchanged.
+func TestATimedSessionWritesNoManualField(t *testing.T) {
+	b, err := json.Marshal(focus(18, 9, 25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "manual") {
+		t.Errorf("timed session encoded as %s, want no manual field", b)
 	}
 }

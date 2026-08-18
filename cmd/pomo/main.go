@@ -308,7 +308,7 @@ func logSession(out io.Writer, cfg config.Config, st *store.Store, hs *habit.Sto
 		when = day.Add(12 * time.Hour)
 	}
 
-	sess, err := store.ManualSession(h, dur, when)
+	sess, err := store.ManualSession(h, dur, when, store.ManualLogged)
 	if err != nil {
 		return err
 	}

@@ -38,7 +38,31 @@ type Session struct {
 	Task  string `json:"task,omitempty"`
 	Phase string `json:"phase"`
 	Done  bool   `json:"done"`
+	// Manual records that pomo did not time this session itself, and which way
+	// it arrived: ManualLogged for `pomo -log`, ManualSkipped for a press of
+	// space on the checklist. Empty means the timer ran it.
+	//
+	// It is omitempty so every line written before it existed stays valid, and
+	// so a timed session — the common case — carries no extra bytes.
+	Manual string `json:"manual,omitempty"`
 }
+
+// How a session that pomo did not time itself came to be recorded.
+const (
+	// ManualLogged is work really done away from the terminal, told to pomo
+	// afterwards with `pomo -log`. It counts for everything a timed session
+	// does, because the time was genuinely spent.
+	ManualLogged = "logged"
+	// ManualSkipped is a press of space on the checklist: the habit's goal
+	// moves, but no timer ran. It earns no XP, so the level cannot be raised
+	// by pressing a key.
+	ManualSkipped = "skipped"
+)
+
+// EarnsXP reports whether a session should count toward XP and level. Skipped
+// time moves goals, streaks and the bars — it is still a habit you did — but
+// letting it raise the level would make the level a count of keypresses.
+func (s Session) EarnsXP() bool { return s.IsWork() && s.Manual != ManualSkipped }
 
 // IsWork reports whether a session counts as focused work: a finished focus
 // phase or a finished zen stretch, with time actually on the clock.
@@ -226,6 +250,13 @@ type Stats struct {
 	ZenTodayMins int
 	ZenWeekMins  int
 
+	// Skipped totals are the share of the above that no timer ran, so the
+	// stats screen can say how much of a day was actually sat through. They
+	// are counted in TodayMins and WeekMins, and in no habit's goal any
+	// differently — only XP leaves them out.
+	SkippedTodayMins int
+	SkippedWeekMins  int
+
 	// ByDay holds the last DaysCharted days of completed focus minutes,
 	// oldest first, for the stats screen's bar chart.
 	ByDay []DayTotal
@@ -279,7 +310,9 @@ func Compute(sessions []Session, now time.Time) Stats {
 		if !s.IsWork() {
 			continue
 		}
-		st.XP += s.Mins
+		if s.EarnsXP() {
+			st.XP += s.Mins
+		}
 
 		day := civil(s.Start.In(loc))
 		key := dayKey(day)
@@ -300,6 +333,14 @@ func Compute(sessions []Session, now time.Time) Stats {
 			}
 			if inWeek {
 				st.ZenWeekMins += s.Mins
+			}
+		}
+		if s.Manual == ManualSkipped {
+			if day.Equal(today) {
+				st.SkippedTodayMins += s.Mins
+			}
+			if inWeek {
+				st.SkippedWeekMins += s.Mins
 			}
 		}
 	}

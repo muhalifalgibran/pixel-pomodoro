@@ -80,7 +80,13 @@ jobs:
           notes=$(cat <<'EOF'
           ## Install
 
-          Already on v0.1.1 or later:
+          Homebrew, which skips the macOS Gatekeeper prompt:
+
+          ```sh
+          brew install muhalifalgibran/tap/pomo
+          ```
+
+          Already installed some other way, on v0.1.1 or later:
 
           ```sh
           pomo --update
@@ -94,15 +100,19 @@ jobs:
           # pick the file matching your machine, then:
           tar -xzf pomo_*.tar.gz
           sudo mv pomo_*/pomo /usr/local/bin/pomo
+
+          # macOS only: clear the quarantine BEFORE the first run
+          sudo xattr -c /usr/local/bin/pomo
+
           pomo
           ```
 
-          On macOS, Gatekeeper will block an unsigned download the first time.
-          Clear it with:
-
-          ```sh
-          xattr -d com.apple.quarantine /usr/local/bin/pomo
-          ```
+          The `xattr` line has to come first. pomo is ad-hoc signed but not
+          notarized, so Gatekeeper stops the first run of a download — and on
+          macOS 15 and later that dialog offers only "Move to Trash", with no
+          "Open Anyway" button. If you have already hit it, run the `xattr`
+          line and try again, or use System Settings -> Privacy & Security ->
+          Open Anyway.
 
           **With Go**
 

@@ -39,6 +39,7 @@ const (
 	modeHabitForm
 	modeConfirm
 	modeEditTask
+	modeCheck
 )
 
 type tickMsg time.Time
@@ -94,6 +95,16 @@ type Model struct {
 	// sessions is the replayed log, kept in memory so stats can be
 	// recomputed after each append without re-reading the file.
 	sessions []store.Session
+	// marks is the stack of check-offs [u] can take back, newest last. It lives
+	// in memory only, which is what scopes undo to this run: a mis-press is
+	// worth taking back, a week-old entry is history.
+	marks []store.Session
+	// checkStatus is the check-off screen's feedback line — what was logged, or
+	// why an undo was refused.
+	checkStatus string
+	// progressDay is the calendar day progress was last computed for, so a run
+	// left open across midnight notices.
+	progressDay string
 
 	tomato *sprite.Sprite
 	geom   geom
@@ -330,7 +341,12 @@ func unknownHabit(name string, habits habit.List) error {
 // refreshProgress recomputes the per-habit figures from the in-memory log.
 func (m *Model) refreshProgress(now time.Time) {
 	m.progress = store.Progress(m.sessions, m.habits.Active(), now)
+	m.progressDay = sameDayKey(now)
 }
+
+// sameDayKey is the calendar day now falls in, for noticing that the figures on
+// screen belong to yesterday.
+func sameDayKey(now time.Time) string { return now.Format("2006-01-02") }
 
 // activeHabit returns the habit sessions are being logged against.
 func (m *Model) activeHabit() (habit.Habit, bool) {
@@ -441,6 +457,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case modeHabits:
 		m.habitsKey(msg)
 		return nil
+	case modeCheck:
+		m.checkKey(msg)
+		return nil
 	case modeHabitForm:
 		m.formKey(msg)
 		return nil
@@ -462,6 +481,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "h":
 		m.mode = modeHabits
 		m.habitCursor = m.cursorForActive()
+	case "l":
+		m.mode = modeCheck
+		m.habitCursor = m.cursorForActive()
+		m.checkStatus = ""
 	case "t":
 		if m.mode == modeStats {
 			m.mode = modeNormal
@@ -547,6 +570,135 @@ func (m *Model) habitsKey(msg tea.KeyMsg) {
 			m.askToRemove(active[m.habitCursor])
 		}
 	}
+}
+
+// checkKey drives the [l] screen. It shares habitCursor with the habit list —
+// both index the same slice, so moving between the two screens keeps your place.
+func (m *Model) checkKey(msg tea.KeyMsg) {
+	active := m.habits.Active()
+
+	switch msg.String() {
+	case "ctrl+c", "q":
+		m.saveResume()
+		m.quitting = true
+	case "esc", "l":
+		m.mode = modeNormal
+	case "j", "down":
+		if len(active) > 0 {
+			m.habitCursor = (m.habitCursor + 1) % len(active)
+			m.checkStatus = ""
+		}
+	case "k", "up":
+		if len(active) > 0 {
+			m.habitCursor = (m.habitCursor - 1 + len(active)) % len(active)
+			m.checkStatus = ""
+		}
+	case " ":
+		if m.habitCursor < len(active) {
+			m.markDone(active[m.habitCursor])
+		}
+	case "u":
+		m.undoMark()
+	case "enter":
+		if m.habitCursor < len(active) {
+			m.selectHabit(active[m.habitCursor].ID)
+		}
+	}
+}
+
+// markDone credits a habit with one session's worth of work without the timer
+// having run, for something already done. It goes through the same builder
+// `pomo -log` uses, so the two record the same thing.
+//
+// The running timer is deliberately untouched, even when the marked habit is
+// the active one: a mark asserts something about the past, and resetting the
+// clock over it would throw away real elapsed time.
+func (m *Model) markDone(h habit.Habit) {
+	dur := m.checkAmount(h)
+	if dur <= 0 {
+		m.checkStatus = h.Name + " is already done — u takes a session back"
+		return
+	}
+	sess, err := store.ManualSession(h, dur, time.Now(), store.ManualSkipped)
+	if err != nil {
+		m.checkStatus = err.Error()
+		return
+	}
+
+	met := m.progress[h.ID].Met
+	m.appendSession(sess)
+	m.marks = append(m.marks, sess)
+
+	m.checkStatus = fmt.Sprintf("skipped %s of %s — u to undo", habit.FormatMinutes(sess.Mins), h.Name)
+	if !met && m.progress[h.ID].Met {
+		m.checkStatus = h.Name + " — goal met"
+	}
+}
+
+// checkAmount is how long one press of space would credit h with: a session at
+// the habit's own length, clamped so a time goal lands exactly on its target
+// instead of overshooting it. A 90m goal ticked at 25m a time therefore goes
+// 25, 50, 75, 90 rather than 100.
+//
+// Zero means there is nothing left to fill, which is also what stops a met
+// habit quietly stacking sessions every time space is pressed.
+func (m *Model) checkAmount(h habit.Habit) time.Duration {
+	p := m.progress[h.ID]
+	if p.Met {
+		return 0
+	}
+	dur := store.SessionLength(h, m.cfg.Focus)
+	// A session count cannot be part-filled, so only a time goal is clamped.
+	if h.Goal.Unit == habit.Minutes {
+		if left := time.Duration(p.Target-p.Value) * time.Minute; left > 0 && left < dur {
+			dur = left
+		}
+	}
+	return dur
+}
+
+// undoMark takes back the newest check-off still on the stack, one press per
+// session, so a goal ticked up in several presses walks back down the same way.
+//
+// A finished phase or a break landing in between does not disarm it: the store
+// removes the tick's own line wherever it now sits, so only what this run
+// pressed is ever removed, and never a session the timer really ran.
+func (m *Model) undoMark() {
+	if len(m.marks) == 0 {
+		m.checkStatus = "nothing to undo"
+		return
+	}
+
+	mark := m.marks[len(m.marks)-1]
+	if err := m.store.Remove(mark); err != nil {
+		// The line is gone from under us — a hand edit, or another pomo
+		// rewriting the log. Drop the stack rather than guess at what is left.
+		m.marks = nil
+		m.checkStatus = "the log has moved on — that one stays"
+		return
+	}
+	m.marks = m.marks[:len(m.marks)-1]
+	m.sessions = dropSession(m.sessions, mark)
+
+	now := time.Now()
+	m.stats = store.Compute(m.sessions, now)
+	m.refreshProgress(now)
+	m.checkStatus = fmt.Sprintf("took back %s of %s",
+		habit.FormatMinutes(mark.Mins), mark.Task)
+}
+
+// dropSession removes the newest copy of sess from the in-memory log, matching
+// the store's own rule. Position is not enough: a phase can land after a tick,
+// so the tick being undone is not necessarily the last one in the slice.
+func dropSession(sessions []store.Session, sess store.Session) []store.Session {
+	for i := len(sessions) - 1; i >= 0; i-- {
+		s := sessions[i]
+		if s.Mins == sess.Mins && s.Habit == sess.Habit && s.Task == sess.Task &&
+			s.Phase == sess.Phase && s.Done == sess.Done && s.Start.Equal(sess.Start) {
+			return append(sessions[:i], sessions[i+1:]...)
+		}
+	}
+	return sessions
 }
 
 func (m *Model) formKey(msg tea.KeyMsg) {
@@ -695,6 +847,15 @@ func (m *Model) advance(now time.Time) {
 		dt = 0
 	}
 	m.lastTick = now
+
+	// Progress is otherwise only recomputed when a session lands, so a pomo
+	// left open overnight would keep showing yesterday's figures — and the
+	// check-off screen is exactly where that reads as a bug, since a row would
+	// sit there ticked until the first press of the new day snapped it back.
+	if m.progressDay != "" && sameDayKey(now) != m.progressDay {
+		m.stats = store.Compute(m.sessions, now)
+		m.refreshProgress(now)
+	}
 
 	scaled := time.Duration(float64(dt) * m.tickScale)
 	seconds := scaled.Seconds()
@@ -887,6 +1048,15 @@ func (m *Model) View() string {
 		return withLegend(pal,
 			habitsView(pal, m.habits.Active(), m.progress, m.habitCursor, m.activeID),
 			habitsKeysFor(len(m.habits.Active()) > 0), m.statsWidth())
+	case modeCheck:
+		active := m.habits.Active()
+		var next time.Duration
+		if m.habitCursor < len(active) {
+			next = m.checkAmount(active[m.habitCursor])
+		}
+		return withLegend(pal,
+			checkView(pal, active, m.progress, m.habitCursor, m.activeID, m.checkStatus),
+			checkKeysFor(len(active) > 0, next), m.statsWidth())
 	case modeHabitForm:
 		return withLegend(pal, m.habitForm.view(pal), formKeys, m.statsWidth())
 	case modeConfirm:

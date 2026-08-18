@@ -6,7 +6,9 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -36,7 +38,31 @@ type Session struct {
 	Task  string `json:"task,omitempty"`
 	Phase string `json:"phase"`
 	Done  bool   `json:"done"`
+	// Manual records that pomo did not time this session itself, and which way
+	// it arrived: ManualLogged for `pomo -log`, ManualSkipped for a press of
+	// space on the checklist. Empty means the timer ran it.
+	//
+	// It is omitempty so every line written before it existed stays valid, and
+	// so a timed session — the common case — carries no extra bytes.
+	Manual string `json:"manual,omitempty"`
 }
+
+// How a session that pomo did not time itself came to be recorded.
+const (
+	// ManualLogged is work really done away from the terminal, told to pomo
+	// afterwards with `pomo -log`. It counts for everything a timed session
+	// does, because the time was genuinely spent.
+	ManualLogged = "logged"
+	// ManualSkipped is a press of space on the checklist: the habit's goal
+	// moves, but no timer ran. It earns no XP, so the level cannot be raised
+	// by pressing a key.
+	ManualSkipped = "skipped"
+)
+
+// EarnsXP reports whether a session should count toward XP and level. Skipped
+// time moves goals, streaks and the bars — it is still a habit you did — but
+// letting it raise the level would make the level a count of keypresses.
+func (s Session) EarnsXP() bool { return s.IsWork() && s.Manual != ManualSkipped }
 
 // IsWork reports whether a session counts as focused work: a finished focus
 // phase or a finished zen stretch, with time actually on the clock.
@@ -63,11 +89,10 @@ func (s *Store) Append(sess Session) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	line, err := json.Marshal(sess)
+	line, err := encodeSession(sess)
 	if err != nil {
-		return fmt.Errorf("encode session: %w", err)
+		return err
 	}
-	line = append(line, '\n')
 
 	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -78,6 +103,96 @@ func (s *Store) Append(sess Session) error {
 		return fmt.Errorf("write session: %w", err)
 	}
 	return nil
+}
+
+// ErrNotInLog reports that the session the caller wanted to take back is no
+// longer in the log, so there is nothing to remove.
+var ErrNotInLog = errors.New("that session is no longer in the log")
+
+// Remove drops the line sess wrote, wherever it now sits. Only a line that is
+// still byte-for-byte what sess encoded to is touched, so a caller can only
+// ever take back its own append and never somebody else's.
+//
+// This is the one operation that rewrites the file. It works on the raw lines
+// rather than on what Load returned, because Load drops unparseable lines on
+// purpose (see below) and rebuilding from it would quietly delete a user's
+// damaged-but-present history. Every other line is copied through untouched,
+// and the replacement lands by rename, so a crash leaves either the old file
+// or the new one and never a half-written log.
+//
+// It removes the last match rather than the first: identical lines can only
+// come from identical appends, and taking the newest keeps undo in the order
+// the presses happened.
+func (s *Store) Remove(sess Session) error {
+	target, err := encodeSession(sess)
+	if err != nil {
+		return err
+	}
+	target = bytes.TrimRight(target, "\n")
+
+	data, err := os.ReadFile(s.path)
+	if os.IsNotExist(err) {
+		return ErrNotInLog
+	}
+	if err != nil {
+		return fmt.Errorf("read session log: %w", err)
+	}
+
+	// SplitAfter keeps the newline on each piece, so every other line is
+	// written back exactly as it was found.
+	lines := bytes.SplitAfter(data, []byte("\n"))
+	at := -1
+	for i, line := range lines {
+		trimmed := bytes.TrimRight(line, "\n")
+		if len(trimmed) > 0 && bytes.Equal(trimmed, target) {
+			at = i
+		}
+	}
+	if at < 0 {
+		return ErrNotInLog
+	}
+
+	kept := make([]byte, 0, len(data)-len(target))
+	for i, line := range lines {
+		if i == at {
+			continue
+		}
+		kept = append(kept, line...)
+	}
+	return s.replace(kept)
+}
+
+// replace swaps the log's contents atomically.
+func (s *Store) replace(data []byte) error {
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".sessions-*.jsonl")
+	if err != nil {
+		return fmt.Errorf("create temporary session log: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write session log: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close session log: %w", err)
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		return fmt.Errorf("replace session log: %w", err)
+	}
+	return nil
+}
+
+// encodeSession renders one log line. Append and RemoveLast share it so the
+// bytes RemoveLast matches against are the bytes Append wrote.
+func encodeSession(sess Session) ([]byte, error) {
+	line, err := json.Marshal(sess)
+	if err != nil {
+		return nil, fmt.Errorf("encode session: %w", err)
+	}
+	return append(line, '\n'), nil
 }
 
 // Load reads the whole log. Unparseable lines are skipped and counted rather
@@ -135,6 +250,13 @@ type Stats struct {
 	ZenTodayMins int
 	ZenWeekMins  int
 
+	// Skipped totals are the share of the above that no timer ran, so the
+	// stats screen can say how much of a day was actually sat through. They
+	// are counted in TodayMins and WeekMins, and in no habit's goal any
+	// differently — only XP leaves them out.
+	SkippedTodayMins int
+	SkippedWeekMins  int
+
 	// ByDay holds the last DaysCharted days of completed focus minutes,
 	// oldest first, for the stats screen's bar chart.
 	ByDay []DayTotal
@@ -188,7 +310,9 @@ func Compute(sessions []Session, now time.Time) Stats {
 		if !s.IsWork() {
 			continue
 		}
-		st.XP += s.Mins
+		if s.EarnsXP() {
+			st.XP += s.Mins
+		}
 
 		day := civil(s.Start.In(loc))
 		key := dayKey(day)
@@ -209,6 +333,14 @@ func Compute(sessions []Session, now time.Time) Stats {
 			}
 			if inWeek {
 				st.ZenWeekMins += s.Mins
+			}
+		}
+		if s.Manual == ManualSkipped {
+			if day.Equal(today) {
+				st.SkippedTodayMins += s.Mins
+			}
+			if inWeek {
+				st.SkippedWeekMins += s.Mins
 			}
 		}
 	}

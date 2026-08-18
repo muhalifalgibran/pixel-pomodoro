@@ -48,12 +48,24 @@ func StatsReport(pal theme.Palette, st store.Stats, habits []habit.Habit, progre
 	b.WriteString(title.Render("POMO STATS"))
 	b.WriteString("\n\n")
 
+	today := fmt.Sprintf("%d sessions, %s", st.TodaySessions, humanMins(st.TodayMins))
+	if st.SkippedTodayMins > 0 {
+		today += fmt.Sprintf("  (%s skipped)", humanMins(st.SkippedTodayMins))
+	}
+	week := humanMins(st.WeekMins)
+	if st.SkippedWeekMins > 0 {
+		week += fmt.Sprintf("  (%s skipped)", humanMins(st.SkippedWeekMins))
+	}
+
 	rows := [][2]string{
 		{"Level", fmt.Sprintf("%d", st.Level)},
 		{"XP", fmt.Sprintf("%d  (%d/%d into this level)", st.XP, st.XPIntoLevel, st.XPForLevel)},
 		{"Streak", fmt.Sprintf("%d days", st.Streak)},
-		{"Today", fmt.Sprintf("%d sessions, %s", st.TodaySessions, humanMins(st.TodayMins))},
-		{"This week", humanMins(st.WeekMins)},
+		// Skipped minutes are shown alongside rather than subtracted: they count
+		// toward the habit's goal, and hiding them would make the totals
+		// disagree with the bars below. They are the one thing XP leaves out.
+		{"Today", today},
+		{"This week", week},
 	}
 	// Zen belongs to no habit, so it appears in no bar. Showing it here keeps
 	// the time from looking like it went missing.

@@ -190,3 +190,46 @@ func TestResolveVersionFallsBackToDev(t *testing.T) {
 		t.Error("resolveVersion() returned an empty string")
 	}
 }
+
+func TestPrintTodayReportsTheChecklist(t *testing.T) {
+	cfg, st, hs := logFixture(t)
+	var out bytes.Buffer
+
+	if err := logSession(&out, cfg, st, hs, []string{"reading time"}, "", now()); err != nil {
+		t.Fatalf("logSession() error = %v", err)
+	}
+	out.Reset()
+
+	if err := printToday(&out, cfg, st, hs, now()); err != nil {
+		t.Fatalf("printToday() error = %v", err)
+	}
+
+	got := out.String()
+	for _, want := range []string{"TODAY", "1 of 2 done", "[x]", "[ ]", "reading time", "work"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("-today output is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// -log is work really done away from the terminal, so it earns XP as a timed
+// session would. Only a checklist skip does not.
+func TestLogSessionIsMarkedAsLoggedNotSkipped(t *testing.T) {
+	cfg, st, hs := logFixture(t)
+	var out bytes.Buffer
+
+	if err := logSession(&out, cfg, st, hs, []string{"work", "90m"}, "", now()); err != nil {
+		t.Fatalf("logSession() error = %v", err)
+	}
+
+	sessions, _, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Manual != store.ManualLogged {
+		t.Errorf("Manual = %q, want %q", sessions[0].Manual, store.ManualLogged)
+	}
+	if !sessions[0].EarnsXP() {
+		t.Error("-log should earn XP; the time was really spent")
+	}
+}

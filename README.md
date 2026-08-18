@@ -82,6 +82,16 @@ quietly.
 
 ## Install
 
+**Homebrew** is the easiest way, and skips the macOS Gatekeeper prompt
+entirely — `brew` does not quarantine what it downloads:
+
+```sh
+brew install muhalifalgibran/tap/pomo
+```
+
+<details>
+<summary>Or download the binary yourself</summary>
+
 **No Go required.** `pomo` is a single static binary with the art embedded in
 it, so a download is all you need.
 
@@ -114,6 +124,8 @@ Verify a download against the published checksums:
 ```sh
 sha256sum -c checksums.txt --ignore-missing
 ```
+
+</details>
 
 <details>
 <summary>If you do have Go</summary>
@@ -176,8 +188,13 @@ timer on it instead.
 ## Updating
 
 ```sh
-pomo --update
+brew upgrade pomo     # if you installed with Homebrew
+pomo --update         # otherwise
 ```
+
+Pick one or the other. `--update` replaces the binary in place, which is not
+where Homebrew expects to find it, so running both on the same install makes
+them disagree about what is installed.
 
 Fetches the latest release, checks the download against the SHA-256 published
 alongside it, and replaces the running binary in place. It asks first; `-y`

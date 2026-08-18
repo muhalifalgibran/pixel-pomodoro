@@ -80,7 +80,13 @@ jobs:
           notes=$(cat <<'EOF'
           ## Install
 
-          Already on v0.1.1 or later:
+          Homebrew, which skips the macOS Gatekeeper prompt:
+
+          ```sh
+          brew install muhalifalgibran/tap/pomo
+          ```
+
+          Already installed some other way, on v0.1.1 or later:
 
           ```sh
           pomo --update
